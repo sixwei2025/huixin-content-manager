@@ -1,7 +1,8 @@
 #!/bin/zsh
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-OUT="/Users/yuanliuwei/Documents/Codex/2026-11-13/new-chat-7/outputs/汇芯内容创业管家.app"
+APP_OUTPUT="${HUIXIN_APP_OUT:-$ROOT/dist/汇芯内容创业管家.app}"
+OUT="$APP_OUTPUT"
 rm -rf "$OUT"
 mkdir -p "$OUT/Contents/MacOS"
 xcrun swiftc -O -swift-version 5 -target arm64-apple-macosx14.0 "$ROOT/main.swift" -o "$OUT/Contents/MacOS/HuixinContentManager" -framework AppKit -framework SwiftUI
