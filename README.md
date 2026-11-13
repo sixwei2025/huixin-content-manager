@@ -36,6 +36,13 @@ CSV 导入列名和示例见 [CONNECTIONS.md](CONNECTIONS.md)。
 
 公众号官方接口的真实联调记录见 [WECHAT_API_RESEARCH.md](WECHAT_API_RESEARCH.md)。
 
+## 其他平台的官方接入准备
+
+- X / Twitter：在 X Developer 创建应用，申请用户读取权限，取得 User Bearer Token 后，在连接中心填写用户名和 Token；应用会读取公开账号指标。X 官方要求通过开发者应用和 OAuth 授权访问账号数据。
+- 抖音：在抖音开放平台创建并审核应用，再申请用户视频/数据权限；官方接口需要 OAuth 授权后的 `access_token` 和 `open_id`，不能只凭抖音账号密码读取。
+- B 站：先完成开放平台身份认证并创建应用，再取得 `client_id`、`app_secret` 和 OAuth `access_token`。B 站开放接口要求按官方签名协议请求，普通网页接口不作为本产品的数据来源。
+- 小红书：先完成开放平台主体与应用审核；在官方能力明确覆盖账号数据前，产品保留 CSV 导入，不接第三方抓取。
+
 ## 本地运行
 
 ```bash
