@@ -191,8 +191,9 @@ struct ImportedPlatformMetrics {
         wechatStatus = "正在读取昨日数据…"
         Task {
             do {
-                wechat.saveCredentials(appID: appID, secret: secret)
                 let summary = try await wechat.fetchSummary(appID: appID, secret: secret)
+                // 只有官方接口验证成功后才保存，避免把空值或错误凭证写入钥匙串。
+                wechat.saveCredentials(appID: appID, secret: secret)
                 wechatSummary = summary
                 wechatStatus = "已连接 · 昨日数据已读取"
                 dataSource = "公众号真实数据已连接 · 其他平台仍为演示或手动导入"
