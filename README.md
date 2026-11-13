@@ -53,6 +53,15 @@ CSV 导入列名和示例见 [CONNECTIONS.md](CONNECTIONS.md)。
 
 ## 本地运行
 
+从 GitHub 获取源码后，在 Apple 芯片 Mac 上执行：
+
+```bash
+git clone https://github.com/sixwei2025/huixin-content-manager.git
+cd huixin-content-manager
+./build.sh
+open "dist/汇芯内容创业管家.app"
+```
+
 ```bash
 ./build.sh
 open "dist/汇芯内容创业管家.app"
@@ -69,6 +78,8 @@ HUIXIN_APP_OUT="/你的交付目录/汇芯内容创业管家.app" ./build.sh
 ## 公众号连接前提
 
 需要公众号管理员提供 AppID 和 AppSecret，并在公众号相关开发者设置中配置本机或服务端出口 IP 白名单。凭证只保存在本机钥匙串，不应提交到 Git 仓库。内容库页面的“刷新公众号草稿”使用官方 `draft/batchget` 接口；如果本机不在白名单内，应用会自动通过 SSH 隧道连接到已加入白名单的腾讯云中继。当前中继服务文件见 `server/wechat-relay.mjs`，只监听服务器本机，不开放公网接口。
+
+仓库里的 `server/wechat-relay.mjs` 只是中继服务源码示例，不包含任何账号凭证，也不会自动替使用者部署到公网。需要白名单中继时，应把它部署到自己的服务器并让服务只监听 `127.0.0.1`，再通过 SSH 隧道连接。
 
 ## 诚实边界
 
