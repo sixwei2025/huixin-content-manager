@@ -108,7 +108,7 @@ struct PlatformConnection: Identifiable {
     let color: Color
 }
 
-struct ImportedPlatformMetrics {
+struct ImportedPlatformMetrics: Codable {
     var followers: Int?
     var delta: Int?
     var posts: Int?
@@ -125,6 +125,11 @@ struct ImportedPlatformMetrics {
     }
 }
 
+struct ImportedPlatformSnapshot: Codable {
+    let count: Int
+    let metrics: ImportedPlatformMetrics
+}
+
 @MainActor final class ContentStore: ObservableObject {
     @Published var selectedTab = "总览"
     @Published var lastUpdated = Date()
@@ -135,6 +140,15 @@ struct ImportedPlatformMetrics {
     @Published var importedMetrics: [String: ImportedPlatformMetrics] = [:]
     @Published var dataSource = "演示数据 · 尚未连接平台"
     private let wechat = WeChatConnector()
+    private let importedDataKey = "cn.huixin.contentmanager.imported-platform-data"
+
+    init() {
+        guard let data = UserDefaults.standard.data(forKey: importedDataKey),
+              let snapshots = try? JSONDecoder().decode([String: ImportedPlatformSnapshot].self, from: data) else { return }
+        importedCounts = snapshots.mapValues(\.count)
+        importedMetrics = snapshots.mapValues(\.metrics)
+        if !snapshots.isEmpty { dataSource = "包含已保存的手动导入数据 · 未连接平台不显示为真实数据" }
+    }
 
     let tabs = ["总览", "内容", "平台", "复盘"]
     let connections: [PlatformConnection] = [
@@ -217,6 +231,7 @@ struct ImportedPlatformMetrics {
             let rows = lines.dropFirst().map(parseCSVLine).filter { !$0.allSatisfy { $0.trimmingCharacters(in: .whitespaces).isEmpty } }
             importedCounts[platform] = rows.count
             importedMetrics[platform] = metrics(headers: headers, rows: rows)
+            saveImportedData()
             dataSource = "包含手动导入数据 · 未连接平台不显示为真实数据"
         } catch {
             importedCounts[platform] = 0
@@ -260,6 +275,15 @@ struct ImportedPlatformMetrics {
         }
         result.append(field)
         return result
+    }
+
+    private func saveImportedData() {
+        let snapshots = importedMetrics.reduce(into: [String: ImportedPlatformSnapshot]()) { result, entry in
+            result[entry.key] = ImportedPlatformSnapshot(count: importedCounts[entry.key] ?? 0, metrics: entry.value)
+        }
+        if let data = try? JSONEncoder().encode(snapshots) {
+            UserDefaults.standard.set(data, forKey: importedDataKey)
+        }
     }
 
     private func format(_ value: Int) -> String {
