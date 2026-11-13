@@ -302,6 +302,11 @@ enum XHSConnectorError: LocalizedError {
 final class XHSConnector {
     private let service = "cn.huixin.contentmanager.xhs"
 
+    func savedCredentials() -> (String, String)? {
+        guard let appID = read("appID"), let token = read("token"), !appID.isEmpty, !token.isEmpty else { return nil }
+        return (appID, token)
+    }
+
     func saveCredentials(appID: String, token: String) { write(appID, key: "appID"); write(token, key: "token") }
 
     func fetchUser(appID: String, token: String) async throws -> XHSSummary {
@@ -320,6 +325,7 @@ final class XHSConnector {
     }
 
     private func write(_ value: String, key: String) { let data = Data(value.utf8); SecItemDelete([kSecClass: kSecClassGenericPassword, kSecAttrService: service, kSecAttrAccount: key] as CFDictionary); SecItemAdd([kSecClass: kSecClassGenericPassword, kSecAttrService: service, kSecAttrAccount: key, kSecValueData: data] as CFDictionary, nil) }
+    private func read(_ key: String) -> String? { var result: AnyObject?; let status = SecItemCopyMatching([kSecClass: kSecClassGenericPassword, kSecAttrService: service, kSecAttrAccount: key, kSecReturnData: true] as CFDictionary, &result); guard status == errSecSuccess, let data = result as? Data else { return nil }; return String(data: data, encoding: .utf8) }
 }
 
 enum DouyinConnectorError: LocalizedError {
@@ -335,6 +341,11 @@ enum DouyinConnectorError: LocalizedError {
 
 final class DouyinConnector {
     private let service = "cn.huixin.contentmanager.douyin"
+
+    func savedCredentials() -> (String, String)? {
+        guard let openID = read("openID"), let token = read("token"), !openID.isEmpty, !token.isEmpty else { return nil }
+        return (openID, token)
+    }
 
     func saveCredentials(openID: String, token: String) { write(openID, key: "openID"); write(token, key: "token") }
 
@@ -372,6 +383,7 @@ final class DouyinConnector {
     }
 
     private func write(_ value: String, key: String) { let data = Data(value.utf8); SecItemDelete([kSecClass: kSecClassGenericPassword, kSecAttrService: service, kSecAttrAccount: key] as CFDictionary); SecItemAdd([kSecClass: kSecClassGenericPassword, kSecAttrService: service, kSecAttrAccount: key, kSecValueData: data] as CFDictionary, nil) }
+    private func read(_ key: String) -> String? { var result: AnyObject?; let status = SecItemCopyMatching([kSecClass: kSecClassGenericPassword, kSecAttrService: service, kSecAttrAccount: key, kSecReturnData: true] as CFDictionary, &result); guard status == errSecSuccess, let data = result as? Data else { return nil }; return String(data: data, encoding: .utf8) }
 }
 
 struct Platform: Identifiable {
@@ -518,9 +530,53 @@ struct ImportedPlatformSnapshot: Codable {
     func refresh() {
         guard !refreshing else { return }
         refreshing = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-            self.lastUpdated = Date()
-            self.refreshing = false
+        Task {
+            await refreshSavedConnections()
+            lastUpdated = Date()
+            refreshing = false
+        }
+    }
+
+    private func refreshSavedConnections() async {
+        if let credentials = wechat.savedCredentials() {
+            do {
+                wechatSummary = try await wechat.fetchSummary(appID: credentials.0, secret: credentials.1)
+                wechatStatus = "已连接 · 昨日数据已读取"
+            } catch {
+                wechatStatus = error.localizedDescription
+            }
+        }
+        if let credentials = x.savedCredentials() {
+            do {
+                xSummary = try await x.fetchSummary(username: credentials.0, token: credentials.1)
+                xStatus = "已连接 · 粉丝 \(format(xSummary?.followers ?? 0))"
+            } catch {
+                xStatus = error.localizedDescription
+            }
+        }
+        if let credentials = bili.savedCredentials() {
+            do {
+                biliSummary = try await bili.fetchProfile(accessKey: credentials.0, secret: credentials.1, token: credentials.2)
+                biliStatus = "已连接 · \(biliSummary?.name ?? "已授权账号")"
+            } catch {
+                biliStatus = error.localizedDescription
+            }
+        }
+        if let credentials = xhs.savedCredentials() {
+            do {
+                xhsSummary = try await xhs.fetchUser(appID: credentials.0, token: credentials.1)
+                xhsStatus = "已连接 · \(xhsSummary?.nickname ?? "已授权账号")（仅基础信息）"
+            } catch {
+                xhsStatus = error.localizedDescription
+            }
+        }
+        if let credentials = douyin.savedCredentials() {
+            do {
+                douyinSummary = try await douyin.fetchSummary(openID: credentials.0, token: credentials.1)
+                douyinStatus = "已连接 · 粉丝 \(format(douyinSummary?.totalFans ?? 0)) · 近 30 天作品 \(format(douyinSummary?.totalIssue ?? 0)) 条"
+            } catch {
+                douyinStatus = error.localizedDescription
+            }
         }
     }
 
