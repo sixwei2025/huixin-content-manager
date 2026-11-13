@@ -395,6 +395,7 @@ struct Platform: Identifiable {
     let delta: String
     let posts: String
     let engagement: String
+    let source: String
 }
 
 struct ContentItem: Identifiable {
@@ -484,13 +485,13 @@ struct ImportedPlatformSnapshot: Codable {
         .init(name: "视频号", symbol: "play.rectangle.fill", state: "暂用导入", detail: "先保留手动导入，避免绕过平台限制", color: .orange, docsURL: nil)
     ]
     let platforms: [Platform] = [
-        .init(name: "公众号", symbol: "bubble.left.and.bubble.right.fill", color: .green, followers: "12,680", delta: "+386", posts: "18", engagement: "8.6%"),
-        .init(name: "小红书", symbol: "note.text", color: .red, followers: "19,122", delta: "+666", posts: "24", engagement: "15.9%"),
-        .init(name: "视频号", symbol: "play.rectangle.fill", color: .orange, followers: "4,584", delta: "+189", posts: "12", engagement: "6.8%"),
-        .init(name: "抖音", symbol: "music.note", color: .black, followers: "13,060", delta: "+344", posts: "16", engagement: "9.2%"),
-        .init(name: "B站", symbol: "tv.fill", color: .blue, followers: "15,972", delta: "+344", posts: "9", engagement: "11.4%"),
-        .init(name: "X", symbol: "at", color: .primary, followers: "—", delta: "—", posts: "—", engagement: "—"),
-        .init(name: "知识星球", symbol: "person.3.fill", color: .purple, followers: "3,554", delta: "+1,022", posts: "31", engagement: "18.2%")
+        .init(name: "公众号", symbol: "bubble.left.and.bubble.right.fill", color: .green, followers: "12,680", delta: "+386", posts: "18", engagement: "8.6%", source: "演示数据"),
+        .init(name: "小红书", symbol: "note.text", color: .red, followers: "19,122", delta: "+666", posts: "24", engagement: "15.9%", source: "演示数据"),
+        .init(name: "视频号", symbol: "play.rectangle.fill", color: .orange, followers: "4,584", delta: "+189", posts: "12", engagement: "6.8%", source: "演示数据"),
+        .init(name: "抖音", symbol: "music.note", color: .black, followers: "13,060", delta: "+344", posts: "16", engagement: "9.2%", source: "演示数据"),
+        .init(name: "B站", symbol: "tv.fill", color: .blue, followers: "15,972", delta: "+344", posts: "9", engagement: "11.4%", source: "演示数据"),
+        .init(name: "X", symbol: "at", color: .primary, followers: "—", delta: "—", posts: "—", engagement: "—", source: "演示数据"),
+        .init(name: "知识星球", symbol: "person.3.fill", color: .purple, followers: "3,554", delta: "+1,022", posts: "31", engagement: "18.2%", source: "演示数据")
     ]
 
     var displayPlatforms: [Platform] {
@@ -500,23 +501,23 @@ struct ImportedPlatformSnapshot: Codable {
                                 followers: imported.followers.map(format) ?? "—",
                                 delta: imported.delta.map { $0 >= 0 ? "+\(format($0))" : format($0) } ?? "—",
                                 posts: imported.posts.map(format) ?? "—",
-                                engagement: imported.engagement)
+                                engagement: imported.engagement, source: "CSV 导入")
             }
             if item.name == "X", let summary = xSummary {
                 return Platform(name: item.name, symbol: item.symbol, color: item.color,
                                 followers: format(summary.followers), delta: "—",
-                                posts: format(summary.posts), engagement: "—")
+                                posts: format(summary.posts), engagement: "—", source: "X 官方")
             }
             if item.name == "抖音", let summary = douyinSummary {
                 return Platform(name: item.name, symbol: item.symbol, color: item.color,
                                 followers: format(summary.totalFans), delta: summary.newFans >= 0 ? "+\(format(summary.newFans))" : format(summary.newFans),
-                                posts: format(summary.totalIssue), engagement: "—")
+                                posts: format(summary.totalIssue), engagement: "—", source: "抖音官方")
             }
             guard item.name == "公众号", let summary = wechatSummary else { return item }
             return Platform(name: item.name, symbol: item.symbol, color: item.color,
                             followers: format(summary.followers),
                             delta: summary.newFollowers >= 0 ? "+\(format(summary.newFollowers))" : format(summary.newFollowers),
-                            posts: item.posts, engagement: item.engagement)
+                            posts: item.posts, engagement: item.engagement, source: "公众号官方")
         }
     }
 
@@ -793,6 +794,7 @@ struct PlatformCard: View {
                 Spacer()
                 Text(item.engagement).fontWeight(.semibold)
             }.font(.system(size: 10)).foregroundStyle(.secondary)
+            Text(item.source).font(.system(size: 9, weight: .medium)).foregroundStyle(item.source == "演示数据" ? .orange : .green)
         }
         .padding(14).frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
