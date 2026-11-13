@@ -439,7 +439,7 @@ struct ImportedPlatformSnapshot: Codable {
     }
 
     private func normalize(_ value: String) -> String {
-        value.lowercased().replacingOccurrences(of: " ", with: "").replacingOccurrences(of: "_", with: "")
+        value.replacingOccurrences(of: "\u{FEFF}", with: "").lowercased().replacingOccurrences(of: " ", with: "").replacingOccurrences(of: "_", with: "")
     }
 
     private func parseCSVLine(_ line: String) -> [String] {
