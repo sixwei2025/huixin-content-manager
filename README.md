@@ -22,7 +22,7 @@ v0.1.8 · 2026-11-13
 - X / Twitter 支持填写官方 User Bearer Token，读取账号粉丝、发帖数量等公开指标
 - B 站支持填写官方 Access Key、App Secret 和 OAuth Access Token，按官方 HMAC-SHA256 签名验证授权账号
 - 小红书支持填写官方 App ID 和 OAuth Access Token，验证 basic_info 授权账号
-- 抖音支持填写官方 OAuth open_id 和 access_token，读取近 30 天作品数量、新增作品和新增播放
+- 抖音支持填写官方 OAuth open_id 和 access_token，读取粉丝总量、净增粉丝、近 30 天作品数量、新增作品和新增播放
 - 其他平台 CSV 导入入口与导入条数状态
 - CSV 指标映射：粉丝、净增、发布量、播放、点赞、评论、分享、收藏
 - 演示数据用于本地体验
