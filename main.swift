@@ -29,6 +29,7 @@ enum WeChatConnectorError: LocalizedError {
 }
 
 final class WeChatConnector {
+    private let relayURL = "http://127.0.0.1:18848/wechat"
     private let service = "cn.huixin.contentmanager.wechat"
     private let accountKey = "account"
     private let secretKey = "secret"
@@ -43,6 +44,13 @@ final class WeChatConnector {
     }
 
     func fetchSummary(appID: String, secret: String) async throws -> WeChatSummary {
+        do { return try await fetchSummaryDirect(appID: appID, secret: secret) }
+        catch let error as WeChatConnectorError where error.errorDescription?.contains("白名单") == true {
+            return try await relaySummary(appID: appID, secret: secret)
+        }
+    }
+
+    private func fetchSummaryDirect(appID: String, secret: String) async throws -> WeChatSummary {
         guard !appID.isEmpty, !secret.isEmpty else { throw WeChatConnectorError.missingCredentials }
         var tokenURL = URLComponents(string: "https://api.weixin.qq.com/cgi-bin/token")!
         tokenURL.queryItems = [URLQueryItem(name: "grant_type", value: "client_credential"), URLQueryItem(name: "appid", value: appID), URLQueryItem(name: "secret", value: secret)]
@@ -75,6 +83,13 @@ final class WeChatConnector {
     }
 
     func fetchDrafts(appID: String, secret: String) async throws -> [WeChatDraft] {
+        do { return try await fetchDraftsDirect(appID: appID, secret: secret) }
+        catch let error as WeChatConnectorError where error.errorDescription?.contains("白名单") == true {
+            return try await relayDrafts(appID: appID, secret: secret)
+        }
+    }
+
+    private func fetchDraftsDirect(appID: String, secret: String) async throws -> [WeChatDraft] {
         guard !appID.isEmpty, !secret.isEmpty else { throw WeChatConnectorError.missingCredentials }
         let token = try await accessToken(appID: appID, secret: secret)
         let result = try await postJSON("https://api.weixin.qq.com/cgi-bin/draft/batchget?access_token=\(token)", body: ["offset": "0", "count": "20", "no_content": "1"])
@@ -87,6 +102,31 @@ final class WeChatConnector {
             let timestamp = item["update_time"] as? Int
             return WeChatDraft(id: mediaID, title: title, updateTime: timestamp.map { Date(timeIntervalSince1970: TimeInterval($0)) }, articleCount: news.count)
         }
+    }
+
+    private func relaySummary(appID: String, secret: String) async throws -> WeChatSummary {
+        let result = try await relay(action: "summary", appID: appID, secret: secret)
+        guard let data = result["data"] as? [String: Any] else { throw WeChatConnectorError.api(result["error"] as? String ?? "腾讯云中继返回错误") }
+        return WeChatSummary(followers: data["followers"] as? Int ?? 0, newFollowers: data["newFollowers"] as? Int ?? 0, articleReads: data["articleReads"] as? Int ?? 0, articleShares: data["articleShares"] as? Int ?? 0)
+    }
+
+    private func relayDrafts(appID: String, secret: String) async throws -> [WeChatDraft] {
+        let result = try await relay(action: "drafts", appID: appID, secret: secret)
+        guard let data = result["data"] as? [[String: Any]] else { throw WeChatConnectorError.api(result["error"] as? String ?? "腾讯云中继返回错误") }
+        return data.compactMap { item in
+            guard let id = item["id"] as? String else { return nil }
+            let timestamp = item["updateTime"] as? Int
+            return WeChatDraft(id: id, title: item["title"] as? String ?? "未命名草稿", updateTime: timestamp.map { Date(timeIntervalSince1970: TimeInterval($0)) }, articleCount: item["articleCount"] as? Int ?? 0)
+        }
+    }
+
+    private func relay(action: String, appID: String, secret: String) async throws -> [String: Any] {
+        var request = URLRequest(url: URL(string: relayURL)!)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["action": action, "appID": appID, "secret": secret])
+        let (data, _) = try await URLSession.shared.data(for: request)
+        return try json(data)
     }
 
     private func accessToken(appID: String, secret: String) async throws -> String {
@@ -467,7 +507,7 @@ struct Dashboard: View {
                 else { reviewView }
             }
             HStack { Text(store.dataSource).font(.system(size: 10)).foregroundStyle(.secondary); Spacer(); Text("更新于 \(store.lastUpdated.formatted(date: .omitted, time: .shortened))").font(.system(size: 10)).foregroundStyle(.tertiary) }
-        }.padding(20).frame(width: 900, height: 650).background(Color(nsColor: .windowBackgroundColor)).sheet(isPresented: $about) { Text("汇芯内容创业管家\n第一版先用演示数据验证交互。下一步再接入真实数据导入、平台连接和自动复盘。\n\n袁六伟 · 台州汇芯").font(.system(size: 13)).multilineTextAlignment(.leading).padding(28).frame(width: 430) }.sheet(isPresented: $wechatSheet) { wechatForm }.sheet(isPresented: $connectionSheet) { connectionForm }
+        }.padding(20).frame(width: 900, height: 650).background(Color(nsColor: .windowBackgroundColor)).sheet(isPresented: $about) { Text("汇芯内容创业管家\n官方优先接入公众号草稿箱和可用数据；其他平台支持授权或 CSV 导入。\n\n袁六伟 · 台州汇芯").font(.system(size: 13)).multilineTextAlignment(.leading).padding(28).frame(width: 430) }.sheet(isPresented: $wechatSheet) { wechatForm }.sheet(isPresented: $connectionSheet) { connectionForm }
     }
     var connectionForm: some View { VStack(alignment: .leading, spacing: 14) { Text("平台连接中心").font(.title2.bold()); Text("每个平台单独授权，数据来源和权限状态清楚可见。公众号走官方接口，其余平台可先授权或导入后台导出的 CSV。").font(.system(size: 12)).foregroundStyle(.secondary); ForEach(store.connections) { item in HStack(spacing: 12) { Image(systemName: item.symbol).foregroundStyle(item.color).frame(width: 24); VStack(alignment: .leading, spacing: 3) { Text(item.name).font(.system(size: 12, weight: .semibold)); Text(item.detail).font(.system(size: 10)).foregroundStyle(.secondary); if let count = store.importedCounts[item.name] { Text("已导入 \(count) 条记录").font(.system(size: 10, weight: .medium)).foregroundStyle(.green) } }; Spacer(); Text(item.name == "微信公众号" ? store.wechatStatus : item.state).font(.system(size: 10, weight: .medium)).foregroundStyle(item.name == "微信公众号" && store.wechatStatus.hasPrefix("已连接") ? .green : .secondary); if item.name == "微信公众号" { Button("设置") { connectionSheet = false; wechatSheet = true } } else { Button("导入 CSV") { store.importCSV(for: item.name) } } }.padding(10).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10)) }; HStack { Spacer(); Button("完成") { connectionSheet = false }.keyboardShortcut(.defaultAction) } }.padding(24).frame(width: 600) }
     var wechatForm: some View { VStack(alignment: .leading, spacing: 16) { Text("连接微信公众号").font(.title2.bold()); Text("读取昨日粉丝和图文数据。AppID、AppSecret 只保存在本机钥匙串，不会写入 GitHub 或上传到第三方。公众号后台还需要配置服务器出口 IP 白名单。").font(.system(size: 12)).foregroundStyle(.secondary); TextField("公众号 AppID", text: $appID).textFieldStyle(.roundedBorder); SecureField("公众号 AppSecret", text: $appSecret).textFieldStyle(.roundedBorder); Text(store.wechatStatus).font(.system(size: 11)).foregroundStyle(store.wechatStatus.hasPrefix("已连接") ? .green : .secondary); HStack { Spacer(); Button("取消") { wechatSheet = false }; Button("连接并读取") { store.connectWeChat(appID: appID, secret: appSecret); wechatSheet = false }.keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent) } }.padding(24).frame(width: 500) }
@@ -483,12 +523,27 @@ struct Dashboard: View {
     var status: NSStatusItem!
     var popover: NSPopover!
     var window: NSWindow?
+    var relayProcess: Process?
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        startWeChatRelayTunnel()
         popover = NSPopover(); popover.contentViewController = NSHostingController(rootView: Dashboard(store: store)); popover.contentSize = NSSize(width: 900, height: 650); popover.behavior = .transient
         status = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = status.button { button.image = NSImage(systemSymbolName: "chart.bar.fill", accessibilityDescription: "汇芯 内容创业管家"); button.image?.isTemplate = true; button.toolTip = "汇芯 内容创业管家"; button.target = self; button.action = #selector(toggle) }
         if CommandLine.arguments.contains("--show") { showWindow() }
+    }
+    func applicationWillTerminate(_ notification: Notification) {
+        relayProcess?.terminate()
+    }
+    private func startWeChatRelayTunnel() {
+        let key = "/Users/yuanliuwei/.ssh/opencław_wechat_publish"
+        guard FileManager.default.fileExists(atPath: key) else { return }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+        process.arguments = ["-N", "-T", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no", "-o", "ExitOnForwardFailure=yes", "-i", key, "-L", "18848:127.0.0.1:3002", "root@43.156.246.8"]
+        process.standardOutput = Pipe(); process.standardError = Pipe()
+        try? process.run()
+        relayProcess = process
     }
     @objc func toggle() { if popover.isShown { popover.performClose(nil) } else { guard let button = status.button else { return }; NSApp.activate(ignoringOtherApps: true); popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY) } }
     func showWindow() { let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 650), styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false); w.title = "汇芯 内容创业管家"; w.contentView = NSHostingView(rootView: Dashboard(store: store)); w.center(); w.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); window = w }
