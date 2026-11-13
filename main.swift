@@ -108,6 +108,23 @@ struct PlatformConnection: Identifiable {
     let color: Color
 }
 
+struct ImportedPlatformMetrics {
+    var followers: Int?
+    var delta: Int?
+    var posts: Int?
+    var views: Int?
+    var likes: Int?
+    var comments: Int?
+    var shares: Int?
+    var saves: Int?
+
+    var engagement: String {
+        guard let views, views > 0 else { return "—" }
+        let interactions = (likes ?? 0) + (comments ?? 0) + (shares ?? 0) + (saves ?? 0)
+        return String(format: "%.1f%%", Double(interactions) / Double(views) * 100)
+    }
+}
+
 @MainActor final class ContentStore: ObservableObject {
     @Published var selectedTab = "总览"
     @Published var lastUpdated = Date()
@@ -115,6 +132,7 @@ struct PlatformConnection: Identifiable {
     @Published var wechatSummary: WeChatSummary?
     @Published var wechatStatus = "尚未连接"
     @Published var importedCounts: [String: Int] = [:]
+    @Published var importedMetrics: [String: ImportedPlatformMetrics] = [:]
     @Published var dataSource = "演示数据 · 尚未连接平台"
     private let wechat = WeChatConnector()
 
@@ -138,6 +156,13 @@ struct PlatformConnection: Identifiable {
 
     var displayPlatforms: [Platform] {
         platforms.map { item in
+            if let imported = importedMetrics[item.name] {
+                return Platform(name: item.name, symbol: item.symbol, color: item.color,
+                                followers: imported.followers.map(format) ?? "—",
+                                delta: imported.delta.map { $0 >= 0 ? "+\(format($0))" : format($0) } ?? "—",
+                                posts: imported.posts.map(format) ?? "—",
+                                engagement: imported.engagement)
+            }
             guard item.name == "公众号", let summary = wechatSummary else { return item }
             return Platform(name: item.name, symbol: item.symbol, color: item.color,
                             followers: format(summary.followers),
@@ -185,12 +210,55 @@ struct PlatformConnection: Identifiable {
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
             let content = try String(contentsOf: url, encoding: .utf8)
-            let rows = content.split(whereSeparator: { $0.isNewline }).dropFirst().filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            let lines = content.split(whereSeparator: { $0.isNewline }).map(String.init).filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            guard let headerLine = lines.first else { importedCounts[platform] = 0; return }
+            let headers = parseCSVLine(headerLine).map(normalize)
+            let rows = lines.dropFirst().map(parseCSVLine).filter { !$0.allSatisfy { $0.trimmingCharacters(in: .whitespaces).isEmpty } }
             importedCounts[platform] = rows.count
+            importedMetrics[platform] = metrics(headers: headers, rows: rows)
             dataSource = "包含手动导入数据 · 未连接平台不显示为真实数据"
         } catch {
             importedCounts[platform] = 0
         }
+    }
+
+    private func metrics(headers: [String], rows: [[String]]) -> ImportedPlatformMetrics {
+        func value(_ aliases: [String]) -> Int? {
+            guard let index = headers.firstIndex(where: { aliases.contains($0) }) else { return nil }
+            return rows.compactMap { row in
+                guard index < row.count else { return nil }
+                let cleaned = row[index].replacingOccurrences(of: ",", with: "").trimmingCharacters(in: .whitespaces)
+                return Int(cleaned)
+            }.last
+        }
+        return ImportedPlatformMetrics(
+            followers: value(["followers", "follower", "粉丝", "粉丝数", "followercount", "fans"]),
+            delta: value(["delta", "净增", "涨粉", "新增粉丝", "newfollowers"]),
+            posts: value(["posts", "发布量", "发布", "作品数", "内容数"]),
+            views: value(["views", "播放", "播放量", "阅读", "阅读量", "reads"]),
+            likes: value(["likes", "点赞", "点赞数"]),
+            comments: value(["comments", "评论", "评论数"]),
+            shares: value(["shares", "分享", "分享数", "转发", "转发数"]),
+            saves: value(["saves", "收藏", "收藏数"])
+        )
+    }
+
+    private func normalize(_ value: String) -> String {
+        value.lowercased().replacingOccurrences(of: " ", with: "").replacingOccurrences(of: "_", with: "")
+    }
+
+    private func parseCSVLine(_ line: String) -> [String] {
+        var result: [String] = []
+        var field = ""
+        var quoted = false
+        var iterator = line.makeIterator()
+        while let character = iterator.next() {
+            if character == "\"" { quoted.toggle() }
+            else if character == "," && !quoted { result.append(field); field = "" }
+            else { field.append(character) }
+        }
+        result.append(field)
+        return result
     }
 
     private func format(_ value: Int) -> String {
