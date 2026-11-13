@@ -674,6 +674,29 @@ struct ImportedPlatformSnapshot: Codable {
         }
     }
 
+    func exportReport() {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.commaSeparatedText]
+        panel.nameFieldStringValue = "汇芯内容创业管家-平台报告.csv"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        func csv(_ value: String) -> String {
+            let quote = String(UnicodeScalar(34))
+            let escaped = value.replacingOccurrences(of: quote, with: quote + quote)
+            return quote + escaped + quote
+        }
+        var lines = ["平台,粉丝,净增,本月内容,互动率,数据来源,更新时间"]
+        let updatedAt = lastUpdated.formatted(date: .numeric, time: .shortened)
+        lines.append(contentsOf: displayPlatforms.map { item in
+            [item.name, item.followers, item.delta, item.posts, item.engagement, item.source, updatedAt].map(csv).joined(separator: ",")
+        })
+        let output = "\u{FEFF}" + lines.joined(separator: "\n") + "\n"
+        do {
+            try output.write(to: url, atomically: true, encoding: .utf8)
+        } catch {
+            dataSource = "报告导出失败：\(error.localizedDescription)"
+        }
+    }
+
     func importCSV(for platform: String) {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.commaSeparatedText, .text, .data]
@@ -863,7 +886,7 @@ struct Dashboard: View {
                 Spacer()
                 Button { store.refresh() } label: { Label(store.refreshing ? "更新中" : "更新", systemImage: "arrow.clockwise") }.controlSize(.small).disabled(store.refreshing)
                 Button("连接平台") { connectionSheet = true }.controlSize(.small)
-                Menu { Button("使用说明") { about = true }; Button("打开独立窗口") { (NSApp.delegate as? AppDelegate)?.showWindow() }; Divider(); Button("退出汇芯 内容创业管家") { NSApp.terminate(nil) } } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).frame(width: 24)
+                Menu { Button("导出平台报告") { store.exportReport() }; Button("使用说明") { about = true }; Button("打开独立窗口") { (NSApp.delegate as? AppDelegate)?.showWindow() }; Divider(); Button("退出汇芯 内容创业管家") { NSApp.terminate(nil) } } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).frame(width: 24)
             }
             Picker("", selection: $store.selectedTab) { ForEach(store.tabs, id: \.self) { Text($0).tag($0) } }.pickerStyle(.segmented)
             ScrollView {
