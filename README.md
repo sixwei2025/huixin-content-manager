@@ -34,7 +34,13 @@ CSV 导入列名和示例见 [CONNECTIONS.md](CONNECTIONS.md)。
 
 ```bash
 ./build.sh
-open "../outputs/汇芯内容创业管家.app"
+open "dist/汇芯内容创业管家.app"
+```
+
+如需把应用输出到其他目录，可临时设置 `HUIXIN_APP_OUT`，例如：
+
+```bash
+HUIXIN_APP_OUT="/你的交付目录/汇芯内容创业管家.app" ./build.sh
 ```
 
 要求：Apple 芯片 Mac、macOS 14 或更高版本。
