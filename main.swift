@@ -41,7 +41,12 @@ final class WeChatConnector {
         tokenURL.queryItems = [URLQueryItem(name: "grant_type", value: "client_credential"), URLQueryItem(name: "appid", value: appID), URLQueryItem(name: "secret", value: secret)]
         let (tokenData, _) = try await URLSession.shared.data(from: tokenURL.url!)
         let tokenJSON = try json(tokenData)
-        guard let token = tokenJSON["access_token"] as? String else { throw WeChatConnectorError.api(tokenJSON["errmsg"] as? String ?? "公众号授权失败") }
+        guard let token = tokenJSON["access_token"] as? String else {
+            if let code = tokenJSON["errcode"] as? Int, code == 40164 {
+                throw WeChatConnectorError.api("微信凭证已识别，但当前出口 IP 不在公众号白名单中。请将本机当前出口 IP 加入白名单后重试。")
+            }
+            throw WeChatConnectorError.api(tokenJSON["errmsg"] as? String ?? "公众号授权失败")
+        }
         let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: Date())!
         let date = DateFormatter(); date.dateFormat = "yyyy-MM-dd"; date.locale = Locale(identifier: "en_US_POSIX")
         let day = date.string(from: yesterday)
@@ -68,7 +73,12 @@ final class WeChatConnector {
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, _) = try await URLSession.shared.data(for: request)
         let result = try json(data)
-        if let code = result["errcode"] as? Int, code != 0 { throw WeChatConnectorError.api(result["errmsg"] as? String ?? "公众号数据接口返回错误") }
+        if let code = result["errcode"] as? Int, code != 0 {
+            if code == 48001 {
+                throw WeChatConnectorError.api("公众号凭证有效，但当前账号未开通这项数据统计接口权限。请在公众号后台确认账号类型与数据统计权限。")
+            }
+            throw WeChatConnectorError.api(result["errmsg"] as? String ?? "公众号数据接口返回错误")
+        }
         return result
     }
 
