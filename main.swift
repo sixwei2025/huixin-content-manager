@@ -38,6 +38,8 @@ struct DouyinSummary {
     var totalIssue: Int
     var newIssue: Int
     var newPlay: Int
+    var totalFans: Int
+    var newFans: Int
 }
 
 enum WeChatConnectorError: LocalizedError {
@@ -350,7 +352,23 @@ final class DouyinConnector {
             throw DouyinConnectorError.api(dataObject["description"] as? String ?? "抖音官方接口返回错误，请检查授权权限")
         }
         func number(_ value: Any?) -> Int { if let value = value as? Int { return value }; return Int(String(describing: value ?? "0")) ?? 0 }
-        return DouyinSummary(totalIssue: number(last["total_issue"]), newIssue: number(last["new_issue"]), newPlay: number(last["new_play"]))
+        let fans = try await fetchMetric(path: "fans", openID: openID, token: token)
+        return DouyinSummary(totalIssue: number(last["total_issue"]), newIssue: number(last["new_issue"]), newPlay: number(last["new_play"]), totalFans: number(fans["total_fans"]), newFans: number(fans["new_fans"]))
+    }
+
+    private func fetchMetric(path: String, openID: String, token: String) async throws -> [String: Any] {
+        var components = URLComponents(string: "https://open.douyin.com/data/external/user/\(path)/")!
+        components.queryItems = [URLQueryItem(name: "open_id", value: openID), URLQueryItem(name: "date_type", value: "30")]
+        var request = URLRequest(url: components.url!)
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(token, forHTTPHeaderField: "access-token")
+        let (data, _) = try await URLSession.shared.data(for: request)
+        let result = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+        let dataObject = result["data"] as? [String: Any] ?? [:]
+        guard let rows = dataObject["result_list"] as? [[String: Any]], let last = rows.last else {
+            throw DouyinConnectorError.api(dataObject["description"] as? String ?? "抖音粉丝接口返回错误，请检查 data.external.user 权限")
+        }
+        return last
     }
 
     private func write(_ value: String, key: String) { let data = Data(value.utf8); SecItemDelete([kSecClass: kSecClassGenericPassword, kSecAttrService: service, kSecAttrAccount: key] as CFDictionary); SecItemAdd([kSecClass: kSecClassGenericPassword, kSecAttrService: service, kSecAttrAccount: key, kSecValueData: data] as CFDictionary, nil) }
@@ -479,7 +497,7 @@ struct ImportedPlatformSnapshot: Codable {
             }
             if item.name == "抖音", let summary = douyinSummary {
                 return Platform(name: item.name, symbol: item.symbol, color: item.color,
-                                followers: "—", delta: summary.newIssue >= 0 ? "+\(format(summary.newIssue))" : format(summary.newIssue),
+                                followers: format(summary.totalFans), delta: summary.newFans >= 0 ? "+\(format(summary.newFans))" : format(summary.newFans),
                                 posts: format(summary.totalIssue), engagement: "—")
             }
             guard item.name == "公众号", let summary = wechatSummary else { return item }
@@ -574,7 +592,7 @@ struct ImportedPlatformSnapshot: Codable {
                 let summary = try await douyin.fetchSummary(openID: openID.trimmingCharacters(in: .whitespacesAndNewlines), token: token.trimmingCharacters(in: .whitespacesAndNewlines))
                 douyin.saveCredentials(openID: openID, token: token)
                 douyinSummary = summary
-                douyinStatus = "已连接 · 近 30 天作品 \(format(summary.totalIssue)) 条"
+                douyinStatus = "已连接 · 粉丝 \(format(summary.totalFans)) · 近 30 天作品 \(format(summary.totalIssue)) 条"
                 dataSource = "抖音官方数据已连接 · 其他平台仍为演示或手动导入"
             } catch {
                 douyinStatus = error.localizedDescription
