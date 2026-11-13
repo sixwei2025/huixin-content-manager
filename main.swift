@@ -75,7 +75,7 @@ final class WeChatConnector {
         let result = try json(data)
         if let code = result["errcode"] as? Int, code != 0 {
             if code == 48001 {
-                throw WeChatConnectorError.api("公众号凭证有效，但当前账号未开通这项数据统计接口权限。请在公众号后台确认账号类型与数据统计权限。")
+                throw WeChatConnectorError.api("公众号凭证有效，但当前账号没有这项接口权限。GitHub 上的多个公众号工具也将个人未认证号的统计接口标为不可用；可继续使用 CSV 导入，认证号开通数据统计权限后再接入。")
             }
             throw WeChatConnectorError.api(result["errmsg"] as? String ?? "公众号数据接口返回错误")
         }
