@@ -468,11 +468,17 @@ struct ImportedPlatformSnapshot: Codable {
     private let importedDataKey = "cn.huixin.contentmanager.imported-platform-data"
 
     init() {
-        guard let data = UserDefaults.standard.data(forKey: importedDataKey),
-              let snapshots = try? JSONDecoder().decode([String: ImportedPlatformSnapshot].self, from: data) else { return }
-        importedCounts = snapshots.mapValues(\.count)
-        importedMetrics = snapshots.mapValues(\.metrics)
-        if !snapshots.isEmpty { dataSource = "包含已保存的手动导入数据 · 未连接平台不显示为真实数据" }
+        if let data = UserDefaults.standard.data(forKey: importedDataKey),
+           let snapshots = try? JSONDecoder().decode([String: ImportedPlatformSnapshot].self, from: data) {
+            importedCounts = snapshots.mapValues(\.count)
+            importedMetrics = snapshots.mapValues(\.metrics)
+            if !snapshots.isEmpty { dataSource = "包含已保存的手动导入数据 · 未连接平台不显示为真实数据" }
+        }
+        if wechat.savedCredentials() != nil { wechatStatus = "已保存凭证 · 点击更新" }
+        if x.savedCredentials() != nil { xStatus = "已保存凭证 · 点击更新" }
+        if bili.savedCredentials() != nil { biliStatus = "已保存凭证 · 点击更新" }
+        if xhs.savedCredentials() != nil { xhsStatus = "已保存凭证 · 点击更新" }
+        if douyin.savedCredentials() != nil { douyinStatus = "已保存凭证 · 点击更新" }
     }
 
     let tabs = ["总览", "内容", "平台", "复盘"]
