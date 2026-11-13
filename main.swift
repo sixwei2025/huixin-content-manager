@@ -10,6 +10,13 @@ struct WeChatSummary {
     var updatedAt = Date()
 }
 
+struct WeChatDraft: Identifiable {
+    let id: String
+    let title: String
+    let updateTime: Date?
+    let articleCount: Int
+}
+
 enum WeChatConnectorError: LocalizedError {
     case missingCredentials
     case api(String)
@@ -65,6 +72,35 @@ final class WeChatConnector {
         summary.articleReads = articleRows.map { sum($0, ["int_page_read_count", "ori_page_read_count"]) }.reduce(0, +)
         summary.articleShares = readRows.map { sum($0, ["share_count", "add_to_fav_count"]) }.reduce(0, +)
         return summary
+    }
+
+    func fetchDrafts(appID: String, secret: String) async throws -> [WeChatDraft] {
+        guard !appID.isEmpty, !secret.isEmpty else { throw WeChatConnectorError.missingCredentials }
+        let token = try await accessToken(appID: appID, secret: secret)
+        let result = try await postJSON("https://api.weixin.qq.com/cgi-bin/draft/batchget?access_token=\(token)", body: ["offset": "0", "count": "20", "no_content": "1"])
+        let formatter = DateFormatter(); formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"; formatter.locale = Locale(identifier: "en_US_POSIX")
+        return (result["item"] as? [[String: Any]] ?? []).compactMap { item in
+            guard let mediaID = item["media_id"] as? String else { return nil }
+            let content = item["content"] as? [String: Any]
+            let news = content?["news_item"] as? [[String: Any]] ?? []
+            let title = news.first?["title"] as? String ?? "未命名草稿"
+            let timestamp = item["update_time"] as? Int
+            return WeChatDraft(id: mediaID, title: title, updateTime: timestamp.map { Date(timeIntervalSince1970: TimeInterval($0)) }, articleCount: news.count)
+        }
+    }
+
+    private func accessToken(appID: String, secret: String) async throws -> String {
+        var tokenURL = URLComponents(string: "https://api.weixin.qq.com/cgi-bin/token")!
+        tokenURL.queryItems = [URLQueryItem(name: "grant_type", value: "client_credential"), URLQueryItem(name: "appid", value: appID), URLQueryItem(name: "secret", value: secret)]
+        let (tokenData, _) = try await URLSession.shared.data(from: tokenURL.url!)
+        let tokenJSON = try json(tokenData)
+        guard let token = tokenJSON["access_token"] as? String else {
+            if let code = tokenJSON["errcode"] as? Int, code == 40164 {
+                throw WeChatConnectorError.api("微信凭证已识别，但当前出口 IP 不在公众号白名单中。请将本机当前出口 IP 加入白名单后重试。")
+            }
+            throw WeChatConnectorError.api(tokenJSON["errmsg"] as? String ?? "公众号授权失败")
+        }
+        return token
     }
 
     private func postJSON(_ url: String, body: [String: String]) async throws -> [String: Any] {
@@ -145,6 +181,8 @@ struct ImportedPlatformSnapshot: Codable {
     @Published var lastUpdated = Date()
     @Published var refreshing = false
     @Published var wechatSummary: WeChatSummary?
+    @Published var wechatDrafts: [WeChatDraft] = []
+    @Published var wechatDraftStatus = "尚未读取草稿箱"
     @Published var wechatStatus = "尚未连接"
     @Published var importedCounts: [String: Int] = [:]
     @Published var importedMetrics: [String: ImportedPlatformMetrics] = [:]
@@ -223,6 +261,23 @@ struct ImportedPlatformSnapshot: Codable {
                 dataSource = "公众号真实数据已连接 · 其他平台仍为演示或手动导入"
             } catch {
                 wechatStatus = error.localizedDescription
+            }
+        }
+    }
+
+    func loadWeChatDrafts() {
+        guard let credentials = wechat.savedCredentials() else {
+            wechatDraftStatus = "请先连接公众号"
+            return
+        }
+        wechatDraftStatus = "正在读取官方草稿箱…"
+        Task {
+            do {
+                let drafts = try await wechat.fetchDrafts(appID: credentials.0, secret: credentials.1)
+                wechatDrafts = drafts
+                wechatDraftStatus = "官方草稿箱 · (drafts.count) 条"
+            } catch {
+                wechatDraftStatus = error.localizedDescription
             }
         }
     }
@@ -383,6 +438,12 @@ struct ContentRow: View {
 
 struct Dashboard: View {
     @ObservedObject var store: ContentStore
+    static let dateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MM-dd HH:mm"
+        formatter.locale = Locale(identifier: "zh_CN")
+        return formatter
+    }()
     @State private var about = false
     @State private var wechatSheet = false
     @State private var connectionSheet = false
@@ -412,7 +473,7 @@ struct Dashboard: View {
     var wechatForm: some View { VStack(alignment: .leading, spacing: 16) { Text("连接微信公众号").font(.title2.bold()); Text("读取昨日粉丝和图文数据。AppID、AppSecret 只保存在本机钥匙串，不会写入 GitHub 或上传到第三方。公众号后台还需要配置服务器出口 IP 白名单。").font(.system(size: 12)).foregroundStyle(.secondary); TextField("公众号 AppID", text: $appID).textFieldStyle(.roundedBorder); SecureField("公众号 AppSecret", text: $appSecret).textFieldStyle(.roundedBorder); Text(store.wechatStatus).font(.system(size: 11)).foregroundStyle(store.wechatStatus.hasPrefix("已连接") ? .green : .secondary); HStack { Spacer(); Button("取消") { wechatSheet = false }; Button("连接并读取") { store.connectWeChat(appID: appID, secret: appSecret); wechatSheet = false }.keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent) } }.padding(24).frame(width: 500) }
     var overview: some View { VStack(spacing: 14) { HStack(spacing: 12) { MetricCard(title: "全平台粉丝", value: "68,972", delta: "↑ 本月 +2,365 · 演示汇总", symbol: "person.3.fill"); MetricCard(title: "本月发布", value: "110 条", delta: "↑ 比上月多 18 条 · 演示汇总", symbol: "paperplane.fill"); MetricCard(title: "总播放 / 阅读", value: "286.4 万", delta: "↑ 本月 +31.8% · 演示汇总", symbol: "play.circle.fill"); MetricCard(title: "内容转化", value: "9.8%", delta: "↑ 知识星球表现最好 · 演示汇总", symbol: "arrow.up.right") }; HStack(alignment: .top, spacing: 14) { TrendChart().frame(maxWidth: .infinity); VStack(alignment: .leading, spacing: 12) { Text("今天值得关注").font(.system(size: 14, weight: .semibold)); insight("小红书近 7 天涨粉最多", "+666 粉丝，占整体增长 28% · 演示", .red); insight("知识星球转化最高", "注册转化率 18.2% · 演示", .purple); if let summary = store.wechatSummary { insight("公众号昨日数据已接入", "净增 \(summary.newFollowers)，阅读 \(summary.articleReads)", .green) } else { insight("公众号内容可以复用", "连接后这里会显示真实昨日数据", .green) } }.padding(16).frame(width: 270, alignment: .leading).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14)) }; HStack(alignment: .top, spacing: 14) { VStack(alignment: .leading, spacing: 8) { Text("平台表现").font(.system(size: 14, weight: .semibold)); LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 10) { ForEach(store.displayPlatforms) { PlatformCard(item: $0) } } }.frame(maxWidth: .infinity); VStack(alignment: .leading, spacing: 8) { Text("最近内容").font(.system(size: 14, weight: .semibold)); ForEach(store.contents.prefix(4)) { ContentRow(item: $0) } }.padding(16).frame(width: 390, alignment: .leading).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14)) } }.padding(.top, 1) }
     func insight(_ title: String, _ detail: String, _ color: Color) -> some View { HStack(alignment: .top, spacing: 8) { Circle().fill(color).frame(width: 7, height: 7).padding(.top, 4); VStack(alignment: .leading, spacing: 3) { Text(title).font(.system(size: 11, weight: .semibold)); Text(detail).font(.system(size: 10)).foregroundStyle(.secondary) } } }
-    var contentView: some View { VStack(alignment: .leading, spacing: 8) { Text("内容库").font(.system(size: 17, weight: .bold)); Text("按平台、状态和表现查看全部内容。下一版会加入选题、排期和复盘入口。").font(.system(size: 11)).foregroundStyle(.secondary); ForEach(store.contents) { ContentRow(item: $0).padding(.horizontal, 12).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12)) } }.padding(.top, 10) }
+    var contentView: some View { VStack(alignment: .leading, spacing: 12) { HStack { VStack(alignment: .leading, spacing: 4) { Text("内容库").font(.system(size: 17, weight: .bold)); Text("先接入公众号官方草稿箱，其他平台继续支持后台 CSV 导入。").font(.system(size: 11)).foregroundStyle(.secondary) }; Spacer(); Button { store.loadWeChatDrafts() } label: { Label("刷新公众号草稿", systemImage: "arrow.clockwise") }.controlSize(.small) }; HStack { Text(store.wechatDraftStatus).font(.system(size: 11, weight: .medium)).foregroundStyle(store.wechatDraftStatus.contains("官方") ? .green : .secondary); Spacer() }.padding(.bottom, 2); if !store.wechatDrafts.isEmpty { VStack(alignment: .leading, spacing: 8) { Text("公众号草稿箱").font(.system(size: 13, weight: .semibold)); ForEach(store.wechatDrafts) { draft in HStack { Image(systemName: "doc.text").foregroundStyle(.green); VStack(alignment: .leading, spacing: 3) { Text(draft.title).font(.system(size: 12, weight: .medium)); Text("\(draft.articleCount) 篇图文 · \(draft.updateTime.map { Self.dateFormatter.string(from: $0) } ?? "时间未知")").font(.system(size: 10)).foregroundStyle(.secondary) }; Spacer(); Text("草稿").font(.system(size: 10, weight: .medium)).foregroundStyle(.orange) }.padding(10).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10)) } }.padding(.bottom, 6) }; ForEach(store.contents) { ContentRow(item: $0).padding(.horizontal, 12).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12)) } }.padding(.top, 10) }
     var platformView: some View { VStack(alignment: .leading, spacing: 10) { Text("平台总览").font(.system(size: 17, weight: .bold)); Text(store.dataSource).font(.system(size: 11)).foregroundStyle(.secondary); LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 12) { ForEach(store.displayPlatforms) { PlatformCard(item: $0) } } }.padding(.top, 10) }
     var reviewView: some View { VStack(alignment: .leading, spacing: 14) { Text("内容复盘").font(.system(size: 17, weight: .bold)); Text("系统会根据真实数据自动生成：哪些主题值得继续、哪些内容适合改编、哪个平台正在增长。").font(.system(size: 12)).foregroundStyle(.secondary); TrendChart(); Text("下一步建议").font(.system(size: 14, weight: .semibold)); insight("把“技能管家”案例拆成 3 个短内容", "已有内容表现好，适合跨平台二次分发", accent); insight("给小红书增加案例型标题", "近 7 天互动率明显高于其他平台", .red); insight("建立咨询转化记录", "目前只能看到播放和互动，成交数据还没有接入", .orange) }.padding(.top, 10) }
 }
@@ -437,4 +498,3 @@ let app = NSApplication.shared
 let delegate = MainActor.assumeIsolated { AppDelegate() }
 app.delegate = delegate
 app.run()
-
