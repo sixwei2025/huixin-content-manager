@@ -30,6 +30,8 @@ GitHub 上的同类项目拆解和本产品的落地边界见 [ARCHITECTURE.md](
 
 CSV 导入列名和示例见 [CONNECTIONS.md](CONNECTIONS.md)。
 
+公众号官方接口的真实联调记录见 [WECHAT_API_RESEARCH.md](WECHAT_API_RESEARCH.md)。
+
 ## 本地运行
 
 ```bash
