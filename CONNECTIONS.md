@@ -24,7 +24,7 @@
 
 ## 小红书
 
-状态：不绕过页面抓取。小红书开放平台目前 `basic_info` 已开放，但用户详细档案（粉丝数、关注数、笔记数）仍标为规划中；首版保留官方入口和 CSV 导入。
+状态：已写入官方 `basic_info` 授权验证链路；用户详细档案（粉丝数、关注数、笔记数）仍标为规划中，因此统计继续使用 CSV 导入。
 
 官方依据：[授权范围](https://openaccount.xiaohongshu.com/docs/scope)、[API 参考](https://openaccount.xiaohongshu.com/docs/api-reference)。
 
