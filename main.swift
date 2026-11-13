@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import Security
+import CryptoKit
 
 struct WeChatSummary {
     var followers: Int = 0
@@ -21,6 +22,11 @@ struct XSummary {
     var followers: Int = 0
     var following: Int = 0
     var posts: Int = 0
+}
+
+struct BiliSummary {
+    var name: String
+    var openID: String
 }
 
 enum WeChatConnectorError: LocalizedError {
@@ -212,6 +218,63 @@ final class XConnector {
     private func read(_ key: String) -> String? { var result: AnyObject?; let status = SecItemCopyMatching([kSecClass: kSecClassGenericPassword, kSecAttrService: service, kSecAttrAccount: key, kSecReturnData: true] as CFDictionary, &result); guard status == errSecSuccess, let data = result as? Data else { return nil }; return String(data: data, encoding: .utf8) }
 }
 
+enum BiliConnectorError: LocalizedError {
+    case missingCredentials
+    case api(String)
+    var errorDescription: String? {
+        switch self {
+        case .missingCredentials: return "请填写 B 站 Access Key、App Secret 和 Access Token"
+        case .api(let message): return message
+        }
+    }
+}
+
+final class BiliConnector {
+    private let service = "cn.huixin.contentmanager.bilibili"
+
+    func savedCredentials() -> (String, String, String)? {
+        guard let key = read("accessKey"), let secret = read("secret"), let token = read("token"), !key.isEmpty, !secret.isEmpty, !token.isEmpty else { return nil }
+        return (key, secret, token)
+    }
+
+    func saveCredentials(accessKey: String, secret: String, token: String) {
+        write(accessKey, key: "accessKey"); write(secret, key: "secret"); write(token, key: "token")
+    }
+
+    func fetchProfile(accessKey: String, secret: String, token: String) async throws -> BiliSummary {
+        guard !accessKey.isEmpty, !secret.isEmpty, !token.isEmpty else { throw BiliConnectorError.missingCredentials }
+        let timestamp = String(Int(Date().timeIntervalSince1970))
+        let nonce = UUID().uuidString
+        let contentMD5 = Insecure.MD5.hash(data: Data()).map { String(format: "%02x", $0) }.joined()
+        let xHeaders = [
+            "x-bili-accesskeyid": accessKey,
+            "x-bili-content-md5": contentMD5,
+            "x-bili-signature-method": "HMAC-SHA256",
+            "x-bili-signature-nonce": nonce,
+            "x-bili-signature-version": "2.0",
+            "x-bili-timestamp": timestamp
+        ]
+        let signingText = xHeaders.keys.sorted().map { "\($0):\(xHeaders[$0]!)" }.joined(separator: "\n")
+        let digest = HMAC<SHA256>.authenticationCode(for: Data(signingText.utf8), using: SymmetricKey(data: Data(secret.utf8)))
+        let authorization = digest.map { String(format: "%02x", $0) }.joined()
+        var request = URLRequest(url: URL(string: "https://member.bilibili.com/arcopen/fn/user/account/info")!)
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(token, forHTTPHeaderField: "Access-Token")
+        request.setValue(authorization, forHTTPHeaderField: "Authorization")
+        for (key, value) in xHeaders { request.setValue(value, forHTTPHeaderField: key) }
+        let (data, _) = try await URLSession.shared.data(for: request)
+        let result = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+        guard (result["code"] as? Int ?? -1) == 0, let profile = result["data"] as? [String: Any] else {
+            throw BiliConnectorError.api(result["message"] as? String ?? "B 站官方接口返回错误，请检查应用签名和授权权限")
+        }
+        return BiliSummary(name: profile["name"] as? String ?? "已授权账号", openID: profile["openid"] as? String ?? "")
+    }
+
+    private func write(_ value: String, key: String) { let data = Data(value.utf8); SecItemDelete([kSecClass: kSecClassGenericPassword, kSecAttrService: service, kSecAttrAccount: key] as CFDictionary); SecItemAdd([kSecClass: kSecClassGenericPassword, kSecAttrService: service, kSecAttrAccount: key, kSecValueData: data] as CFDictionary, nil) }
+    private func read(_ key: String) -> String? { var result: AnyObject?; let status = SecItemCopyMatching([kSecClass: kSecClassGenericPassword, kSecAttrService: service, kSecAttrAccount: key, kSecReturnData: true] as CFDictionary, &result); guard status == errSecSuccess, let data = result as? Data else { return nil }; return String(data: data, encoding: .utf8) }
+}
+
 struct Platform: Identifiable {
     let id = UUID()
     let name: String
@@ -275,12 +338,15 @@ struct ImportedPlatformSnapshot: Codable {
     @Published var wechatDraftStatus = "尚未读取草稿箱"
     @Published var xSummary: XSummary?
     @Published var xStatus = "尚未连接"
+    @Published var biliSummary: BiliSummary?
+    @Published var biliStatus = "尚未连接"
     @Published var wechatStatus = "尚未连接"
     @Published var importedCounts: [String: Int] = [:]
     @Published var importedMetrics: [String: ImportedPlatformMetrics] = [:]
     @Published var dataSource = "演示数据 · 尚未连接平台"
     private let wechat = WeChatConnector()
     private let x = XConnector()
+    private let bili = BiliConnector()
     private let importedDataKey = "cn.huixin.contentmanager.imported-platform-data"
 
     init() {
@@ -375,6 +441,21 @@ struct ImportedPlatformSnapshot: Codable {
                 dataSource = "X 官方数据已连接 · 其他平台仍为演示或手动导入"
             } catch {
                 xStatus = error.localizedDescription
+            }
+        }
+    }
+
+    func connectBili(accessKey: String, secret: String, token: String) {
+        biliStatus = "正在验证 B 站官方授权…"
+        Task {
+            do {
+                let profile = try await bili.fetchProfile(accessKey: accessKey.trimmingCharacters(in: .whitespacesAndNewlines), secret: secret.trimmingCharacters(in: .whitespacesAndNewlines), token: token.trimmingCharacters(in: .whitespacesAndNewlines))
+                bili.saveCredentials(accessKey: accessKey, secret: secret, token: token)
+                biliSummary = profile
+                biliStatus = "已连接 · (profile.name)"
+                dataSource = "B 站官方账号已连接 · 其他平台仍为演示或手动导入"
+            } catch {
+                biliStatus = error.localizedDescription
             }
         }
     }
@@ -561,11 +642,15 @@ struct Dashboard: View {
     @State private var about = false
     @State private var wechatSheet = false
     @State private var xSheet = false
+    @State private var biliSheet = false
     @State private var connectionSheet = false
     @State private var appID = ""
     @State private var appSecret = ""
     @State private var xUsername = ""
     @State private var xToken = ""
+    @State private var biliAccessKey = ""
+    @State private var biliSecret = ""
+    @State private var biliToken = ""
     var body: some View {
         VStack(spacing: 15) {
             HStack(spacing: 11) {
@@ -584,11 +669,12 @@ struct Dashboard: View {
                 else { reviewView }
             }
             HStack { Text(store.dataSource).font(.system(size: 10)).foregroundStyle(.secondary); Spacer(); Text("更新于 \(store.lastUpdated.formatted(date: .omitted, time: .shortened))").font(.system(size: 10)).foregroundStyle(.tertiary) }
-        }.padding(20).frame(width: 900, height: 650).background(Color(nsColor: .windowBackgroundColor)).sheet(isPresented: $about) { Text("汇芯内容创业管家\n官方优先接入公众号草稿箱和可用数据；其他平台支持授权或 CSV 导入。\n\n袁六伟 · 台州汇芯").font(.system(size: 13)).multilineTextAlignment(.leading).padding(28).frame(width: 430) }.sheet(isPresented: $wechatSheet) { wechatForm }.sheet(isPresented: $xSheet) { xForm }.sheet(isPresented: $connectionSheet) { connectionForm }
+        }.padding(20).frame(width: 900, height: 650).background(Color(nsColor: .windowBackgroundColor)).sheet(isPresented: $about) { Text("汇芯内容创业管家\n官方优先接入公众号草稿箱和可用数据；其他平台支持授权或 CSV 导入。\n\n袁六伟 · 台州汇芯").font(.system(size: 13)).multilineTextAlignment(.leading).padding(28).frame(width: 430) }.sheet(isPresented: $wechatSheet) { wechatForm }.sheet(isPresented: $xSheet) { xForm }.sheet(isPresented: $biliSheet) { biliForm }.sheet(isPresented: $connectionSheet) { connectionForm }
     }
-    var connectionForm: some View { VStack(alignment: .leading, spacing: 14) { Text("平台连接中心").font(.title2.bold()); Text("每个平台单独授权，数据来源和权限状态清楚可见。公众号走官方接口，其余平台可先查看官方入口或导入后台导出的 CSV。").font(.system(size: 12)).foregroundStyle(.secondary); ForEach(store.connections) { item in HStack(spacing: 12) { Image(systemName: item.symbol).foregroundStyle(item.color).frame(width: 24); VStack(alignment: .leading, spacing: 3) { Text(item.name).font(.system(size: 12, weight: .semibold)); Text(item.detail).font(.system(size: 10)).foregroundStyle(.secondary); if let count = store.importedCounts[item.name] { Text("已导入 \(count) 条记录").font(.system(size: 10, weight: .medium)).foregroundStyle(.green) } }; Spacer(); Text(item.name == "微信公众号" ? store.wechatStatus : item.name == "X / Twitter" ? store.xStatus : item.state).font(.system(size: 10, weight: .medium)).foregroundStyle((item.name == "微信公众号" && store.wechatStatus.hasPrefix("已连接")) || (item.name == "X / Twitter" && store.xStatus.hasPrefix("已连接")) ? .green : .secondary); if item.name == "微信公众号" { Button("设置") { connectionSheet = false; wechatSheet = true } } else if item.name == "X / Twitter" { Button("设置") { connectionSheet = false; xSheet = true }; if let url = item.docsURL { Button("官方入口") { NSWorkspace.shared.open(URL(string: url)!) } }; Button("导入 CSV") { store.importCSV(for: item.name) } } else { if let url = item.docsURL { Button("官方入口") { NSWorkspace.shared.open(URL(string: url)!) } }; Button("导入 CSV") { store.importCSV(for: item.name) } } }.padding(10).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10)) }; HStack { Spacer(); Button("完成") { connectionSheet = false }.keyboardShortcut(.defaultAction) } }.padding(24).frame(width: 680) }
+    var connectionForm: some View { VStack(alignment: .leading, spacing: 14) { Text("平台连接中心").font(.title2.bold()); Text("每个平台单独授权，数据来源和权限状态清楚可见。公众号走官方接口，其余平台可先查看官方入口或导入后台导出的 CSV。").font(.system(size: 12)).foregroundStyle(.secondary); ForEach(store.connections) { item in HStack(spacing: 12) { Image(systemName: item.symbol).foregroundStyle(item.color).frame(width: 24); VStack(alignment: .leading, spacing: 3) { Text(item.name).font(.system(size: 12, weight: .semibold)); Text(item.detail).font(.system(size: 10)).foregroundStyle(.secondary); if let count = store.importedCounts[item.name] { Text("已导入 \(count) 条记录").font(.system(size: 10, weight: .medium)).foregroundStyle(.green) } }; Spacer(); Text(item.name == "微信公众号" ? store.wechatStatus : item.name == "X / Twitter" ? store.xStatus : item.name == "B站" ? store.biliStatus : item.state).font(.system(size: 10, weight: .medium)).foregroundStyle((item.name == "微信公众号" && store.wechatStatus.hasPrefix("已连接")) || (item.name == "X / Twitter" && store.xStatus.hasPrefix("已连接")) || (item.name == "B站" && store.biliStatus.hasPrefix("已连接")) ? .green : .secondary); if item.name == "微信公众号" { Button("设置") { connectionSheet = false; wechatSheet = true } } else if item.name == "X / Twitter" { Button("设置") { connectionSheet = false; xSheet = true }; if let url = item.docsURL { Button("官方入口") { NSWorkspace.shared.open(URL(string: url)!) } }; Button("导入 CSV") { store.importCSV(for: item.name) } } else if item.name == "B站" { Button("设置") { connectionSheet = false; biliSheet = true }; if let url = item.docsURL { Button("官方入口") { NSWorkspace.shared.open(URL(string: url)!) } }; Button("导入 CSV") { store.importCSV(for: item.name) } } else { if let url = item.docsURL { Button("官方入口") { NSWorkspace.shared.open(URL(string: url)!) } }; Button("导入 CSV") { store.importCSV(for: item.name) } } }.padding(10).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10)) }; HStack { Spacer(); Button("完成") { connectionSheet = false }.keyboardShortcut(.defaultAction) } }.padding(24).frame(width: 700) }
     var wechatForm: some View { VStack(alignment: .leading, spacing: 16) { Text("连接微信公众号").font(.title2.bold()); Text("读取昨日粉丝和图文数据。AppID、AppSecret 只保存在本机钥匙串，不会写入 GitHub 或上传到第三方。公众号后台还需要配置服务器出口 IP 白名单。").font(.system(size: 12)).foregroundStyle(.secondary); TextField("公众号 AppID", text: $appID).textFieldStyle(.roundedBorder); SecureField("公众号 AppSecret", text: $appSecret).textFieldStyle(.roundedBorder); Text(store.wechatStatus).font(.system(size: 11)).foregroundStyle(store.wechatStatus.hasPrefix("已连接") ? .green : .secondary); HStack { Spacer(); Button("取消") { wechatSheet = false }; Button("连接并读取") { store.connectWeChat(appID: appID, secret: appSecret); wechatSheet = false }.keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent) } }.padding(24).frame(width: 500) }
     var xForm: some View { VStack(alignment: .leading, spacing: 16) { Text("连接 X / Twitter").font(.title2.bold()); Text("使用 X Developer 的用户 Bearer Token 读取公开账号信息。Token 只保存在本机钥匙串，不会写入 GitHub。没有 Token 时可先点击平台连接中心的“官方入口”。").font(.system(size: 12)).foregroundStyle(.secondary); TextField("X 用户名（不含 @）", text: $xUsername).textFieldStyle(.roundedBorder); SecureField("User Bearer Token", text: $xToken).textFieldStyle(.roundedBorder); Text(store.xStatus).font(.system(size: 11)).foregroundStyle(store.xStatus.hasPrefix("已连接") ? .green : .secondary); HStack { Spacer(); Button("取消") { xSheet = false }; Button("连接并读取") { store.connectX(username: xUsername, token: xToken); xSheet = false }.keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent) } }.padding(24).frame(width: 540) }
+    var biliForm: some View { VStack(alignment: .leading, spacing: 16) { Text("连接 B 站开放平台").font(.title2.bold()); Text("使用 B 站开放平台应用的 Access Key、App Secret 和 OAuth Access Token，按官方 HMAC-SHA256 签名验证账号。凭证只保存在本机钥匙串。").font(.system(size: 12)).foregroundStyle(.secondary); TextField("Access Key / client_id", text: $biliAccessKey).textFieldStyle(.roundedBorder); SecureField("App Secret", text: $biliSecret).textFieldStyle(.roundedBorder); SecureField("OAuth Access Token", text: $biliToken).textFieldStyle(.roundedBorder); Text(store.biliStatus).font(.system(size: 11)).foregroundStyle(store.biliStatus.hasPrefix("已连接") ? .green : .secondary); HStack { Spacer(); Button("取消") { biliSheet = false }; Button("验证并连接") { store.connectBili(accessKey: biliAccessKey, secret: biliSecret, token: biliToken); biliSheet = false }.keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent) } }.padding(24).frame(width: 580) }
     var overview: some View { VStack(spacing: 14) { HStack(spacing: 12) { MetricCard(title: "全平台粉丝", value: "68,972", delta: "↑ 本月 +2,365 · 演示汇总", symbol: "person.3.fill"); MetricCard(title: "本月发布", value: "110 条", delta: "↑ 比上月多 18 条 · 演示汇总", symbol: "paperplane.fill"); MetricCard(title: "总播放 / 阅读", value: "286.4 万", delta: "↑ 本月 +31.8% · 演示汇总", symbol: "play.circle.fill"); MetricCard(title: "内容转化", value: "9.8%", delta: "↑ 知识星球表现最好 · 演示汇总", symbol: "arrow.up.right") }; HStack(alignment: .top, spacing: 14) { TrendChart().frame(maxWidth: .infinity); VStack(alignment: .leading, spacing: 12) { Text("今天值得关注").font(.system(size: 14, weight: .semibold)); insight("小红书近 7 天涨粉最多", "+666 粉丝，占整体增长 28% · 演示", .red); insight("知识星球转化最高", "注册转化率 18.2% · 演示", .purple); if let summary = store.wechatSummary { insight("公众号昨日数据已接入", "净增 \(summary.newFollowers)，阅读 \(summary.articleReads)", .green) } else { insight("公众号内容可以复用", "连接后这里会显示真实昨日数据", .green) } }.padding(16).frame(width: 270, alignment: .leading).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14)) }; HStack(alignment: .top, spacing: 14) { VStack(alignment: .leading, spacing: 8) { Text("平台表现").font(.system(size: 14, weight: .semibold)); LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 10) { ForEach(store.displayPlatforms) { PlatformCard(item: $0) } } }.frame(maxWidth: .infinity); VStack(alignment: .leading, spacing: 8) { Text("最近内容").font(.system(size: 14, weight: .semibold)); ForEach(store.contents.prefix(4)) { ContentRow(item: $0) } }.padding(16).frame(width: 390, alignment: .leading).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14)) } }.padding(.top, 1) }
     func insight(_ title: String, _ detail: String, _ color: Color) -> some View { HStack(alignment: .top, spacing: 8) { Circle().fill(color).frame(width: 7, height: 7).padding(.top, 4); VStack(alignment: .leading, spacing: 3) { Text(title).font(.system(size: 11, weight: .semibold)); Text(detail).font(.system(size: 10)).foregroundStyle(.secondary) } } }
     var contentView: some View { VStack(alignment: .leading, spacing: 12) { HStack { VStack(alignment: .leading, spacing: 4) { Text("内容库").font(.system(size: 17, weight: .bold)); Text("先接入公众号官方草稿箱，其他平台继续支持后台 CSV 导入。").font(.system(size: 11)).foregroundStyle(.secondary) }; Spacer(); Button { store.loadWeChatDrafts() } label: { Label("刷新公众号草稿", systemImage: "arrow.clockwise") }.controlSize(.small) }; HStack { Text(store.wechatDraftStatus).font(.system(size: 11, weight: .medium)).foregroundStyle(store.wechatDraftStatus.contains("官方") ? .green : .secondary); Spacer() }.padding(.bottom, 2); if !store.wechatDrafts.isEmpty { VStack(alignment: .leading, spacing: 8) { Text("公众号草稿箱").font(.system(size: 13, weight: .semibold)); ForEach(store.wechatDrafts) { draft in HStack { Image(systemName: "doc.text").foregroundStyle(.green); VStack(alignment: .leading, spacing: 3) { Text(draft.title).font(.system(size: 12, weight: .medium)); Text("\(draft.articleCount) 篇图文 · \(draft.updateTime.map { Self.dateFormatter.string(from: $0) } ?? "时间未知")").font(.system(size: 10)).foregroundStyle(.secondary) }; Spacer(); Text("草稿").font(.system(size: 10, weight: .medium)).foregroundStyle(.orange) }.padding(10).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10)) } }.padding(.bottom, 6) }; ForEach(store.contents) { ContentRow(item: $0).padding(.horizontal, 12).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12)) } }.padding(.top, 10) }
