@@ -1,0 +1,21 @@
+name: build-macos
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build application
+        run: ./build.sh
+
+      - name: Verify application bundle
+        run: |
+          codesign --verify --strict "dist/汇芯内容创业管家.app"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "dist/汇芯内容创业管家.app/Contents/Info.plist"
+
