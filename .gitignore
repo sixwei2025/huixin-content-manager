@@ -1,5 +1,7 @@
 build/
+dist/
 .DS_Store
 *.xcuserstate
 *.key
 *.secret
+
