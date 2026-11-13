@@ -479,7 +479,7 @@ struct ImportedPlatformSnapshot: Codable {
             }
             if item.name == "抖音", let summary = douyinSummary {
                 return Platform(name: item.name, symbol: item.symbol, color: item.color,
-                                followers: "—", delta: "+(format(summary.newIssue))",
+                                followers: "—", delta: summary.newIssue >= 0 ? "+\(format(summary.newIssue))" : format(summary.newIssue),
                                 posts: format(summary.totalIssue), engagement: "—")
             }
             guard item.name == "公众号", let summary = wechatSummary else { return item }
@@ -529,7 +529,7 @@ struct ImportedPlatformSnapshot: Codable {
                 let summary = try await x.fetchSummary(username: username.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "@", with: ""), token: token.trimmingCharacters(in: .whitespacesAndNewlines))
                 x.saveCredentials(username: username, token: token)
                 xSummary = summary
-                xStatus = "已连接 · 粉丝 (format(summary.followers))"
+                xStatus = "已连接 · 粉丝 \(format(summary.followers))"
                 dataSource = "X 官方数据已连接 · 其他平台仍为演示或手动导入"
             } catch {
                 xStatus = error.localizedDescription
@@ -544,7 +544,7 @@ struct ImportedPlatformSnapshot: Codable {
                 let profile = try await bili.fetchProfile(accessKey: accessKey.trimmingCharacters(in: .whitespacesAndNewlines), secret: secret.trimmingCharacters(in: .whitespacesAndNewlines), token: token.trimmingCharacters(in: .whitespacesAndNewlines))
                 bili.saveCredentials(accessKey: accessKey, secret: secret, token: token)
                 biliSummary = profile
-                biliStatus = "已连接 · (profile.name)"
+                biliStatus = "已连接 · \(profile.name)"
                 dataSource = "B 站官方账号已连接 · 其他平台仍为演示或手动导入"
             } catch {
                 biliStatus = error.localizedDescription
@@ -559,7 +559,7 @@ struct ImportedPlatformSnapshot: Codable {
                 let profile = try await xhs.fetchUser(appID: appID.trimmingCharacters(in: .whitespacesAndNewlines), token: token.trimmingCharacters(in: .whitespacesAndNewlines))
                 xhs.saveCredentials(appID: appID, token: token)
                 xhsSummary = profile
-                xhsStatus = "已连接 · (profile.nickname)（仅基础信息）"
+                xhsStatus = "已连接 · \(profile.nickname)（仅基础信息）"
                 dataSource = "小红书官方账号已连接 · 统计数据仍需平台开放权限"
             } catch {
                 xhsStatus = error.localizedDescription
@@ -574,7 +574,7 @@ struct ImportedPlatformSnapshot: Codable {
                 let summary = try await douyin.fetchSummary(openID: openID.trimmingCharacters(in: .whitespacesAndNewlines), token: token.trimmingCharacters(in: .whitespacesAndNewlines))
                 douyin.saveCredentials(openID: openID, token: token)
                 douyinSummary = summary
-                douyinStatus = "已连接 · 近 30 天作品 (format(summary.totalIssue)) 条"
+                douyinStatus = "已连接 · 近 30 天作品 \(format(summary.totalIssue)) 条"
                 dataSource = "抖音官方数据已连接 · 其他平台仍为演示或手动导入"
             } catch {
                 douyinStatus = error.localizedDescription
@@ -592,7 +592,7 @@ struct ImportedPlatformSnapshot: Codable {
             do {
                 let drafts = try await wechat.fetchDrafts(appID: credentials.0, secret: credentials.1)
                 wechatDrafts = drafts
-                wechatDraftStatus = "官方草稿箱 · (drafts.count) 条"
+                wechatDraftStatus = "官方草稿箱 · \(drafts.count) 条"
             } catch {
                 wechatDraftStatus = error.localizedDescription
             }
