@@ -14,7 +14,7 @@ cat > "$OUT/Contents/Info.plist" <<'PLIST'
 <key>CFBundleName</key><string>汇芯 内容创业管家</string>
 <key>CFBundleDisplayName</key><string>汇芯 内容创业管家</string>
 <key>CFBundleExecutable</key><string>HuixinContentManager</string>
-<key>CFBundleShortVersionString</key><string>0.1.0</string>
+<key>CFBundleShortVersionString</key><string>0.1.1</string>
 <key>CFBundleVersion</key><string>1</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>LSUIElement</key><true/>
@@ -23,3 +23,4 @@ cat > "$OUT/Contents/Info.plist" <<'PLIST'
 PLIST
 codesign --force --sign - "$OUT"
 echo "$OUT"
+
