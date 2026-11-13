@@ -39,6 +39,8 @@ v0.1.10 · 2026-11-13
 
 GitHub 上的同类项目拆解和本产品的落地边界见 [ARCHITECTURE.md](ARCHITECTURE.md)。本产品采用“一个平台一个连接器、官方授权优先、没有官方能力就明确降级”的方式。
 
+产品展示页源文件见 [showcase/index.html](showcase/index.html)，展示图中的数字均明确标注为演示数据。
+
 CSV 导入列名和示例见 [CONNECTIONS.md](CONNECTIONS.md)。
 
 通用导入模板在 [templates/platform-metrics-template.csv](templates/platform-metrics-template.csv)，下载后按平台后台导出的真实数据替换示例行即可。
