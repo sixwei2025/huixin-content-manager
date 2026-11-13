@@ -114,6 +114,7 @@ struct PlatformConnection: Identifiable {
     @Published var refreshing = false
     @Published var wechatSummary: WeChatSummary?
     @Published var wechatStatus = "尚未连接"
+    @Published var importedCounts: [String: Int] = [:]
     private let wechat = WeChatConnector()
 
     let tabs = ["总览", "内容", "平台", "复盘"]
@@ -161,6 +162,21 @@ struct PlatformConnection: Identifiable {
             } catch {
                 wechatStatus = error.localizedDescription
             }
+        }
+    }
+
+    func importCSV(for platform: String) {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.commaSeparatedText, .text, .data]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let content = try String(contentsOf: url, encoding: .utf8)
+            let rows = content.split(whereSeparator: { $0.isNewline }).dropFirst().filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            importedCounts[platform] = rows.count
+        } catch {
+            importedCounts[platform] = 0
         }
     }
 }
@@ -270,7 +286,7 @@ struct Dashboard: View {
             HStack { Text("演示数据 · 当前先验证界面和使用方式").font(.system(size: 10)).foregroundStyle(.secondary); Spacer(); Text("更新于 \(store.lastUpdated.formatted(date: .omitted, time: .shortened))").font(.system(size: 10)).foregroundStyle(.tertiary) }
         }.padding(20).frame(width: 900, height: 650).background(Color(nsColor: .windowBackgroundColor)).sheet(isPresented: $about) { Text("汇芯内容创业管家\n第一版先用演示数据验证交互。下一步再接入真实数据导入、平台连接和自动复盘。\n\n袁六伟 · 台州汇芯").font(.system(size: 13)).multilineTextAlignment(.leading).padding(28).frame(width: 430) }.sheet(isPresented: $wechatSheet) { wechatForm }.sheet(isPresented: $connectionSheet) { connectionForm }
     }
-    var connectionForm: some View { VStack(alignment: .leading, spacing: 14) { Text("平台连接中心").font(.title2.bold()); Text("每个平台单独授权，数据来源和权限状态清楚可见。当前只有公众号已写入真实读取链路，其余平台先显示接入要求。").font(.system(size: 12)).foregroundStyle(.secondary); ForEach(store.connections) { item in HStack(spacing: 12) { Image(systemName: item.symbol).foregroundStyle(item.color).frame(width: 24); VStack(alignment: .leading, spacing: 3) { Text(item.name).font(.system(size: 12, weight: .semibold)); Text(item.detail).font(.system(size: 10)).foregroundStyle(.secondary) }; Spacer(); Text(item.name == "微信公众号" ? store.wechatStatus : item.state).font(.system(size: 10, weight: .medium)).foregroundStyle(item.name == "微信公众号" && store.wechatStatus.hasPrefix("已连接") ? .green : .secondary); if item.name == "微信公众号" { Button("设置") { connectionSheet = false; wechatSheet = true } } }.padding(10).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10)) }; HStack { Spacer(); Button("完成") { connectionSheet = false }.keyboardShortcut(.defaultAction) } }.padding(24).frame(width: 560) }
+    var connectionForm: some View { VStack(alignment: .leading, spacing: 14) { Text("平台连接中心").font(.title2.bold()); Text("每个平台单独授权，数据来源和权限状态清楚可见。公众号走官方接口，其余平台可先授权或导入后台导出的 CSV。").font(.system(size: 12)).foregroundStyle(.secondary); ForEach(store.connections) { item in HStack(spacing: 12) { Image(systemName: item.symbol).foregroundStyle(item.color).frame(width: 24); VStack(alignment: .leading, spacing: 3) { Text(item.name).font(.system(size: 12, weight: .semibold)); Text(item.detail).font(.system(size: 10)).foregroundStyle(.secondary); if let count = store.importedCounts[item.name] { Text("已导入 \(count) 条记录").font(.system(size: 10, weight: .medium)).foregroundStyle(.green) } }; Spacer(); Text(item.name == "微信公众号" ? store.wechatStatus : item.state).font(.system(size: 10, weight: .medium)).foregroundStyle(item.name == "微信公众号" && store.wechatStatus.hasPrefix("已连接") ? .green : .secondary); if item.name == "微信公众号" { Button("设置") { connectionSheet = false; wechatSheet = true } } else { Button("导入 CSV") { store.importCSV(for: item.name) } } }.padding(10).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10)) }; HStack { Spacer(); Button("完成") { connectionSheet = false }.keyboardShortcut(.defaultAction) } }.padding(24).frame(width: 600) }
     var wechatForm: some View { VStack(alignment: .leading, spacing: 16) { Text("连接微信公众号").font(.title2.bold()); Text("读取昨日粉丝和图文数据。AppID、AppSecret 只保存在本机钥匙串，不会写入 GitHub 或上传到第三方。公众号后台还需要配置服务器出口 IP 白名单。").font(.system(size: 12)).foregroundStyle(.secondary); TextField("公众号 AppID", text: $appID).textFieldStyle(.roundedBorder); SecureField("公众号 AppSecret", text: $appSecret).textFieldStyle(.roundedBorder); Text(store.wechatStatus).font(.system(size: 11)).foregroundStyle(store.wechatStatus.hasPrefix("已连接") ? .green : .secondary); HStack { Spacer(); Button("取消") { wechatSheet = false }; Button("连接并读取") { store.connectWeChat(appID: appID, secret: appSecret); wechatSheet = false }.keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent) } }.padding(24).frame(width: 500) }
     var overview: some View { VStack(spacing: 14) { HStack(spacing: 12) { MetricCard(title: "全平台粉丝", value: "68,972", delta: "↑ 本月 +2,365", symbol: "person.3.fill"); MetricCard(title: "本月发布", value: "110 条", delta: "↑ 比上月多 18 条", symbol: "paperplane.fill"); MetricCard(title: "总播放 / 阅读", value: "286.4 万", delta: "↑ 本月 +31.8%", symbol: "play.circle.fill"); MetricCard(title: "内容转化", value: "9.8%", delta: "↑ 知识星球表现最好", symbol: "arrow.up.right") }; HStack(alignment: .top, spacing: 14) { TrendChart().frame(maxWidth: .infinity); VStack(alignment: .leading, spacing: 12) { Text("今天值得关注").font(.system(size: 14, weight: .semibold)); insight("小红书近 7 天涨粉最多", "+666 粉丝，占整体增长 28%", .red); insight("知识星球转化最高", "注册转化率 18.2%，适合承接深度内容", .purple); insight("公众号内容可以复用", "本月 3 篇文章适合改成短视频", .green) }.padding(16).frame(width: 270, alignment: .leading).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14)) }; HStack(alignment: .top, spacing: 14) { VStack(alignment: .leading, spacing: 8) { Text("平台表现").font(.system(size: 14, weight: .semibold)); LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 10) { ForEach(store.platforms) { PlatformCard(item: $0) } } }.frame(maxWidth: .infinity); VStack(alignment: .leading, spacing: 8) { Text("最近内容").font(.system(size: 14, weight: .semibold)); ForEach(store.contents.prefix(4)) { ContentRow(item: $0) } }.padding(16).frame(width: 390, alignment: .leading).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14)) } }.padding(.top, 1) }
     func insight(_ title: String, _ detail: String, _ color: Color) -> some View { HStack(alignment: .top, spacing: 8) { Circle().fill(color).frame(width: 7, height: 7).padding(.top, 4); VStack(alignment: .leading, spacing: 3) { Text(title).font(.system(size: 11, weight: .semibold)); Text(detail).font(.system(size: 10)).foregroundStyle(.secondary) } } }
