@@ -1120,28 +1120,50 @@ struct MetricCard: View {
 
 struct PlatformCard: View {
     let item: Platform
+    private var parts: (title: String, badge: String?) {
+        let comps = item.name.components(separatedBy: " · ")
+        if comps.count >= 2 { return (comps[0], comps[1]) }
+        return (item.name, nil)
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Image(systemName: item.symbol).foregroundStyle(item.color).frame(width: 21)
-                Text(item.name).font(.system(size: 13, weight: .semibold))
-                Spacer()
-                Text(item.delta).font(.system(size: 10, weight: .medium)).foregroundStyle(.green)
+            HStack(spacing: 5) {
+                Image(systemName: item.symbol).foregroundStyle(item.color).frame(width: 18)
+                Text(parts.title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1)
+                if let badge = parts.badge {
+                    Text(badge)
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(item.color)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(item.color.opacity(0.12), in: Capsule())
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 4)
+                Text(item.delta)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(item.delta == "—" ? .secondary : .green)
+                    .lineLimit(1)
             }
             Text(item.followers).font(.system(size: 23, weight: .bold, design: .rounded)).monospacedDigit()
             HStack {
                 Text("粉丝").foregroundStyle(.secondary)
                 Spacer()
-                Text("本月内容 " + item.posts + " 条").foregroundStyle(.secondary)
+                Text("内容 " + item.posts + " 条").foregroundStyle(.secondary)
             }.font(.system(size: 10))
             HStack {
                 Text("互动率")
                 Spacer()
                 Text(item.engagement).fontWeight(.semibold)
             }.font(.system(size: 10)).foregroundStyle(.secondary)
-            Text(item.source).font(.system(size: 9, weight: .medium)).foregroundStyle(item.source == "演示数据" ? .orange : .green)
+            Text(item.source)
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(item.source == "待连接" ? Color.secondary : (item.source == "演示数据" ? Color.orange : Color.green))
+                .lineLimit(1)
         }
-        .padding(14).frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14).frame(maxWidth: .infinity, minHeight: 120, alignment: .topLeading)
         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
     }
 }

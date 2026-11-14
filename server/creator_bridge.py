@@ -78,8 +78,6 @@ def ensure_dirs() -> None:
 
 
 def profile_dir_for(platform: str) -> Path:
-    if platform == "douyin" and DOUYIN_EXISTING_PROFILE.exists():
-        return DOUYIN_EXISTING_PROFILE
     p = PROFILES_DIR / platform
     p.mkdir(parents=True, exist_ok=True)
     return p
