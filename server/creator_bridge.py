@@ -14,6 +14,8 @@ import asyncio
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 import urllib.request
 from datetime import datetime
@@ -64,6 +66,10 @@ PLATFORM_URLS = {
     "wechat": {
         "login": "https://mp.weixin.qq.com/",
         "home": "https://mp.weixin.qq.com/",
+    },
+    "x": {
+        "login": "https://x.com/i/flow/login",
+        "home": "https://x.com/home",
     },
 }
 
@@ -163,11 +169,14 @@ def cdp_tabs(port: int) -> List[Dict[str, Any]]:
 async def launch_profile_context(playwright, platform: str, headless: bool):
     pdir = profile_dir_for(platform)
     args = ["--mute-audio", "--disable-blink-features=AutomationControlled"]
+    ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
     try:
         return await playwright.chromium.launch_persistent_context(
             str(pdir),
             headless=headless,
             channel="chrome",
+            ignore_default_args=["--enable-automation"],
+            user_agent=ua,
             args=args,
             viewport={"width": 1360, "height": 860},
         )
@@ -175,6 +184,8 @@ async def launch_profile_context(playwright, platform: str, headless: bool):
         return await playwright.chromium.launch_persistent_context(
             str(pdir),
             headless=headless,
+            ignore_default_args=["--enable-automation"],
+            user_agent=ua,
             args=args,
             viewport={"width": 1360, "height": 860},
         )
@@ -241,41 +252,40 @@ async def sync_douyin(playwright) -> Dict[str, Any]:
         try:
             await page.goto(PLATFORM_URLS["douyin"]["manage"], wait_until="domcontentloaded", timeout=30000)
             await page.wait_for_timeout(3500)
-            manage_body = await page.locator("body").inner_text()
-            m_total = re.search(r"共\s*(\d+)\s*个作品|全部作品\s*\(?(\d+)\)?", manage_body)
+            manage_body = await page.locator("body").first.inner_text()
+            m_total = re.search(r"作品\s*\((\d+)\)|共\s*(\d+)\s*个作品|全部作品\s*\(?(\d+)\)?", manage_body)
             if m_total:
-                posts_count = int(m_total.group(1) or m_total.group(2))
-            # Extract video titles + play counts heuristically from manage cards
-            raw_items = await page.evaluate(
-                """() => {
-                    const out = [];
-                    const cards = document.querySelectorAll('[class*="video-card"], [class*="content-item"], [class*="article-card"]');
-                    for (const c of cards) {
-                        const t = (c.innerText || '').trim();
-                        if (!t || t.length < 4) continue;
-                        const lines = t.split('\\n').map(x => x.trim()).filter(x => x && !/^\\d{1,2}:\\d{2}$/.test(x) && !/^置顶$/.test(x));
-                        const title = lines.find(x => x.length >= 4 && !/^(已发布|审核中|未通过|播放|点赞|评论|分享|\\d+)$/.test(x));
-                        if (title) {
-                            out.push({ title: title.slice(0, 60), raw: lines.join(' · ') });
-                        }
-                        if (out.length >= 6) break;
-                    }
-                    return out;
-                }"""
-            )
-            for it in raw_items or []:
-                title = it.get("title", "").strip()
-                raw = it.get("raw", "")
-                if title and title not in {"作品管理", "全部作品"}:
-                    m_views = re.search(r"播放\s*([\d.,]+[万wWkK]?)", raw)
-                    m_likes = re.search(r"点赞\s*([\d.,]+[万wWkK]?)", raw)
-                    items.append({
-                        "title": title,
-                        "platform": "抖音",
-                        "status": "已发布",
-                        "views": m_views.group(1) if m_views else "—",
-                        "likes": m_likes.group(1) if m_likes else "—",
-                    })
+                posts_count = int(next(g for g in m_total.groups() if g is not None))
+            m_lines = [ln.strip() for ln in manage_body.splitlines() if ln.strip()]
+            skip_dy = {"编辑作品", "设置权限", "作品置顶", "删除作品", "已发布", "播放", "点赞", "评论", "分享", "导出数据"}
+            for i, ln in enumerate(m_lines):
+                if re.match(r"^\d{4}年\d{1,2}月\d{1,2}日\s+\d{1,2}:\d{2}$", ln):
+                    # Title is above date (skipping action buttons)
+                    title = ""
+                    for j in range(i - 1, max(-1, i - 8), -1):
+                        cand = m_lines[j]
+                        if cand not in skip_dy and not re.fullmatch(r"\d{1,2}:\d{2}", cand) and len(cand) >= 3:
+                            title = cand
+                            break
+                    # Views & likes are right below date
+                    chunk = m_lines[i + 1 : i + 10]
+                    v_val = "—"
+                    l_val = "—"
+                    for k, tok in enumerate(chunk):
+                        if tok == "播放" and k + 1 < len(chunk):
+                            v_val = chunk[k + 1]
+                        elif tok == "点赞" and k + 1 < len(chunk):
+                            l_val = chunk[k + 1]
+                    if title:
+                        items.append({
+                            "title": title[:60],
+                            "platform": "抖音",
+                            "status": "已发布",
+                            "views": v_val,
+                            "likes": l_val,
+                        })
+                    if len(items) >= 5:
+                        break
         except Exception:
             pass
 
@@ -561,6 +571,33 @@ async def sync_xhs(playwright) -> Dict[str, Any]:
         views = num_after(ov_text, ["曝光量", "观看量", "阅读量", "总曝光"])
         posts = num_after(ov_text, ["发布笔记", "笔记数", "已发布"])
 
+        # Fetch recent notes from note-manager
+        items: List[Dict[str, Any]] = []
+        try:
+            await page.goto(PLATFORM_URLS["xhs"]["notes"], wait_until="domcontentloaded", timeout=30000)
+            await page.wait_for_timeout(3500)
+            notes_body = await page.locator("body").first.inner_text()
+            m_all = re.search(r"全部\s+(\d+)", notes_body)
+            if m_all:
+                posts = int(m_all.group(1))
+            n_lines = [ln.strip() for ln in notes_body.splitlines() if ln.strip()]
+            for i, ln in enumerate(n_lines):
+                if re.match(r"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}$", ln) and i > 0:
+                    title = n_lines[i - 1]
+                    v_val = n_lines[i + 1] if i + 1 < len(n_lines) and re.fullmatch(r"[\d.,万wWkK]+", n_lines[i + 1]) else "—"
+                    l_val = n_lines[i + 2] if i + 2 < len(n_lines) and re.fullmatch(r"[\d.,万wWkK]+", n_lines[i + 2]) else "—"
+                    items.append({
+                        "title": title[:60],
+                        "platform": "小红书",
+                        "status": "已发布",
+                        "views": v_val,
+                        "likes": l_val,
+                    })
+                    if len(items) >= 5:
+                        break
+        except Exception:
+            pass
+
         res.update({
             "ok": True,
             "account": account_name,
@@ -568,6 +605,7 @@ async def sync_xhs(playwright) -> Dict[str, Any]:
             "posts": posts,
             "views": views,
             "likes": likes,
+            "items": items,
             "message": f"已连接 · {account_name}",
         })
         return res
@@ -604,11 +642,48 @@ async def sync_wechat(playwright) -> Dict[str, Any]:
             return res
 
         fans = num_after(body, ["总用户数", "粉丝数", "关注人数"])
-        delta = num_after(body, ["昨日净增", "净增关注", "新增人数"])
-        views = num_after(body, ["阅读次数", "昨日阅读", "阅读"])
-        posts = num_after(body, ["已群发", "群发", "文章数"])
+        delta = num_after(body, ["昨日新增关注(人)", "昨日净增", "净增关注", "新增人数"])
+        views = num_after(body, ["昨日阅读(人)", "阅读次数", "昨日阅读", "阅读"])
+        shares = num_after(body, ["昨日分享(人)", "昨日分享", "分享"])
+        posts = num_after(body, ["原创内容", "已群发", "群发", "文章数"])
         lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
-        account_name = next((ln for ln in lines[:15] if 2 <= len(ln) <= 20 and ln not in {"首页", "微信公众平台", "公众平台", "消息", "留言", "赞赏", "内容管理", "数据统计"} and "公众平台" not in ln and not re.fullmatch(r"[\d,.]+", ln)), "公众号")
+        account_name = next((ln for ln in lines[:20] if 2 <= len(ln) <= 20 and ln not in {"首页", "微信公众平台", "公众平台", "消息", "留言", "赞赏", "内容管理", "数据统计", "互动管理", "数据分析", "收入变现", "账号成长", "营销与服务", "设置与开发", "新的功能", "通知中心"} and "公众平台" not in ln and not re.fullmatch(r"[\d,.]+", ln)), "公众号")
+
+        # Fetch recent published articles via mp.weixin.qq.com internal publish list if token available
+        items: List[Dict[str, Any]] = []
+        m_tok = re.search(r"token=(\d+)", url)
+        if m_tok:
+            tok = m_tok.group(1)
+            try:
+                await page.goto(f"https://mp.weixin.qq.com/cgi-bin/appmsgpublish?sub=list&begin=0&count=10&token={tok}&lang=zh_CN", wait_until="domcontentloaded", timeout=25000)
+                await page.wait_for_timeout(3000)
+                raw_pub = await page.evaluate(
+                    """() => {
+                        const out = [];
+                        const rows = document.querySelectorAll('.publish_card, .weui-desktop-mass__item, [class*="publish-item"], [class*="appmsg_item"]');
+                        for (const r of rows) {
+                            const t = (r.innerText || '').trim();
+                            if (!t) continue;
+                            const ls = t.split('\\n').map(x => x.trim()).filter(x => x.length >= 4 && !/^(已发表|群发|原创|阅读|点赞|在看|分享|留言)$/.test(x));
+                            if (ls.length >= 1) out.push({ title: ls[0].slice(0, 60), raw: t });
+                            if (out.length >= 5) break;
+                        }
+                        return out;
+                    }"""
+                )
+                for it in raw_pub or []:
+                    raw = it.get("raw", "")
+                    m_r = re.search(r"阅读\s*([\d,]+)", raw)
+                    m_l = re.search(r"(?:点赞|在看)\s*([\d,]+)", raw)
+                    items.append({
+                        "title": it["title"],
+                        "platform": "公众号",
+                        "status": "已发布",
+                        "views": m_r.group(1) if m_r else "—",
+                        "likes": m_l.group(1) if m_l else "—",
+                    })
+            except Exception:
+                pass
 
         res.update({
             "ok": True,
@@ -617,11 +692,217 @@ async def sync_wechat(playwright) -> Dict[str, Any]:
             "delta": delta,
             "posts": posts,
             "views": views,
+            "shares": shares,
+            "items": items,
             "message": f"已连接 · {account_name}",
         })
         return res
     except Exception as e:
         res["message"] = f"公众号同步失败：{e}"
+        return res
+    finally:
+        if ctx is not None:
+            await ctx.close()
+
+
+async def sync_zsxq(_playwright=None) -> Dict[str, Any]:
+    res: Dict[str, Any] = {
+        "platform": "知识星球",
+        "key": "zsxq",
+        "ok": False,
+        "need_login": False,
+        "source": "知识星球 CLI",
+        "updated_at": now_iso(),
+        "items": [],
+    }
+    cli = shutil.which("zsxq-cli") or ("/opt/homebrew/bin/zsxq-cli" if Path("/opt/homebrew/bin/zsxq-cli").exists() else None)
+    if not cli:
+        res["message"] = "未检测到 zsxq-cli"
+        return res
+    gid = "88884585518442"
+
+    def run_cli(args: List[str]) -> Optional[Dict[str, Any]]:
+        try:
+            r = subprocess.run([cli, *args], capture_output=True, text=True, timeout=25)
+            return json.loads(r.stdout) if r.stdout.strip() else None
+        except Exception:
+            return None
+
+    try:
+        m_stat = run_cli(["api", "raw", "--method", "GET", "--path", f"/v2/groups/{gid}/members/statistics"]) or {}
+        g_stat = run_cli(["api", "raw", "--method", "GET", "--path", f"/v2/groups/{gid}/statistics"]) or {}
+        topics_resp = run_cli(["group", "+topics", "--group-id", gid, "--limit", "8", "--json"]) or {}
+
+        members = ((m_stat.get("body") or {}).get("resp_data") or {}).get("validity_members_count")
+        topics_count = ((g_stat.get("body") or {}).get("resp_data") or {}).get("topics_count")
+        briefs = topics_resp.get("topics_brief") or []
+
+        items: List[Dict[str, Any]] = []
+        total_views = 0
+        total_likes = 0
+        total_comments = 0
+        group_name = "Workbuddy一人公司营"
+        for t in briefs:
+            grp = t.get("group") or {}
+            if grp.get("name"):
+                group_name = grp["name"]
+            counts = t.get("counts") or {}
+            readers = counts.get("readers") or 0
+            likes = counts.get("likes") or 0
+            comments = counts.get("comments") or 0
+            total_views += readers
+            total_likes += likes
+            total_comments += comments
+            title = (t.get("title") or "").strip()
+            if not title:
+                raw_content = (t.get("content") or "").strip()
+                title = raw_content.splitlines()[0].strip() if raw_content else "星球动态"
+            if len(items) < 5:
+                items.append({
+                    "title": title[:60],
+                    "platform": "知识星球",
+                    "status": "精华" if t.get("digested") else "已发布",
+                    "views": str(readers) if readers else "—",
+                    "likes": str(likes) if likes else "0",
+                })
+
+        if members is None and topics_count is None and not items:
+            res["need_login"] = True
+            res["message"] = "知识星球 CLI 未登录或无权限"
+            return res
+
+        res.update({
+            "ok": True,
+            "account": group_name,
+            "followers": members,
+            "posts": topics_count,
+            "views": total_views if total_views > 0 else None,
+            "likes": total_likes,
+            "comments": total_comments,
+            "items": items,
+            "message": f"已连接 · {group_name}",
+        })
+        return res
+    except Exception as e:
+        res["message"] = f"知识星球同步失败：{e}"
+        return res
+
+
+async def sync_x(playwright) -> Dict[str, Any]:
+    res: Dict[str, Any] = {
+        "platform": "X",
+        "key": "x",
+        "ok": False,
+        "need_login": False,
+        "source": "X 公开主页",
+        "updated_at": now_iso(),
+        "items": [],
+    }
+    handle_file = STATE_DIR / "x_handle.txt"
+    saved_handle = handle_file.read_text(encoding="utf-8").strip().lstrip("@") if handle_file.exists() else ""
+
+    ctx = None
+    try:
+        ctx = await launch_profile_context(playwright, "x", headless=True)
+        page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+        handle = saved_handle
+        if not handle:
+            await page.goto(PLATFORM_URLS["x"]["home"], wait_until="domcontentloaded", timeout=35000)
+            await page.wait_for_timeout(4500)
+            url = page.url or ""
+            profile_href = await page.evaluate(
+                """() => {
+                    const a = document.querySelector('a[data-testid="AppTabBar_Profile_Link"]');
+                    return a ? a.getAttribute('href') : null;
+                }"""
+            )
+            if "login" not in url.lower() and profile_href:
+                handle = profile_href.strip("/")
+                res["source"] = "X 创作者网页版"
+
+        if not handle:
+            res["need_login"] = True
+            res["message"] = "需要登录 X / Twitter 或设置 @用户名"
+            return res
+
+        await page.goto(f"https://x.com/{handle}", wait_until="domcontentloaded", timeout=30000)
+        await page.wait_for_timeout(4500)
+        body = await page.locator("body").first.inner_text()
+
+        # Parse posts count ("123 posts" / "196 帖子") and followers ("1,234 Followers" / "69 关注者")
+        m_posts = re.search(r"([\d,.]+[KMWkmb万]?)\s*(?:posts|Posts|帖子|推文)", body)
+        m_fans = re.search(r"([\d,.]+[KMWkmb万]?)\s*(?:Followers|followers|关注者|粉丝)", body)
+        posts = parse_cn_number(m_posts.group(1)) if m_posts else None
+        fans = parse_cn_number(m_fans.group(1)) if m_fans else None
+
+        if posts is None and fans is None and ("登录" in body[:200] or "Sign in" in body[:200]):
+            res["need_login"] = True
+            res["message"] = "需要登录 X / Twitter"
+            return res
+
+        raw_tweets = await page.evaluate(
+            """() => {
+                const out = [];
+                const arts = document.querySelectorAll('article[data-testid="tweet"], article[role="article"], article');
+                for (const a of arts) {
+                    const txtEl = a.querySelector('div[data-testid="tweetText"]');
+                    let title = txtEl ? txtEl.innerText.trim() : '';
+                    if (!title) {
+                        const card = a.querySelector('[data-testid="card.wrapper"], [data-testid="article-preview"]');
+                        title = card ? card.innerText.trim() : '';
+                    }
+                    if (!title) {
+                        const lines = (a.innerText || '').split('\\n').map(s => s.trim()).filter(Boolean);
+                        const filtered = lines.filter(l => !l.startsWith('@') && !/^\\d+$/.test(l) && l !== '已置顶' && l !== '文章' && !/^\\d+月\\d+日$/.test(l));
+                        title = filtered.slice(1, 3).join(' ');
+                    }
+                    title = title.replace(/\\s+/g, ' ').trim();
+                    if (!title) continue;
+                    const likeEl = a.querySelector('button[data-testid="like"], button[data-testid="unlike"]');
+                    const likeTxt = likeEl ? (likeEl.innerText || '').trim() : '';
+                    const viewEl = a.querySelector('a[href*="/analytics"]');
+                    const viewTxt = viewEl ? (viewEl.innerText || '').trim() : '';
+                    out.push({ title: title.slice(0, 60), views: viewTxt || '—', likes: likeTxt || '0' });
+                    if (out.length >= 5) break;
+                }
+                return out;
+            }"""
+        )
+        items = [
+            {"title": t["title"], "platform": "X", "status": "已发布", "views": t["views"], "likes": t["likes"]}
+            for t in (raw_tweets or [])
+        ]
+        if not items and f"@{handle}\n" in body:
+            chunks = body.split(f"@{handle}\n")[2:]
+            for ch in chunks:
+                lines = [l.strip() for l in ch.splitlines() if l.strip()]
+                # Skip date line like "10月23日" or "Nov 10" and tag "文章"
+                content_lines = []
+                for l in lines:
+                    if re.match(r"^(\d+月\d+日|[A-Z][a-z]{2}\s+\d+|\d+[smhd])$", l) or l in ("文章", "已置顶", "显示更多"):
+                        continue
+                    if re.match(r"^\d[\d,.KMW万]*$", l):
+                        continue
+                    content_lines.append(l)
+                    if len(" ".join(content_lines)) >= 36:
+                        break
+                title = " ".join(content_lines)[:60].strip()
+                if title:
+                    items.append({"title": title, "platform": "X", "status": "已发布", "views": "—", "likes": "—"})
+                if len(items) >= 5:
+                    break
+
+        res.update({
+            "ok": True,
+            "account": f"@{handle}",
+            "followers": fans,
+            "posts": posts,
+            "items": items,
+            "message": f"已连接 · @{handle}",
+        })
+        return res
+    except Exception as e:
+        res["message"] = f"X 同步失败：{e}"
         return res
     finally:
         if ctx is not None:
@@ -635,12 +916,52 @@ SYNC_HANDLERS = {
     "channels_shanhe": sync_channels_shanhe,
     "xhs": sync_xhs,
     "wechat": sync_wechat,
+    "zsxq": sync_zsxq,
+    "x": sync_x,
 }
 
 
 async def run_login(platform: str, timeout_sec: int = 180) -> Dict[str, Any]:
     if platform not in PLATFORM_URLS:
         return {"ok": False, "message": f"不支持的平台：{platform}"}
+
+    # For X / Twitter, Google OAuth blocks Playwright/CDP-controlled browsers.
+    # Launch a genuine, unmodified Google Chrome process with the platform's
+    # dedicated user-data-dir so Google Sign-In works without changing passwords.
+    chrome_bin = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+    if platform == "x" and chrome_bin.exists():
+        pdir = profile_dir_for("x")
+        for lock_name in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
+            lp = pdir / lock_name
+            if lp.exists() or lp.is_symlink():
+                try:
+                    lp.unlink()
+                except Exception:
+                    pass
+        proc = subprocess.Popen(
+            [
+                str(chrome_bin),
+                f"--user-data-dir={pdir}",
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--new-window",
+                PLATFORM_URLS["x"]["login"],
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        for _ in range(timeout_sec):
+            if proc.poll() is not None:
+                break
+            await asyncio.sleep(1)
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except Exception:
+                proc.kill()
+        await asyncio.sleep(1)
+        return await run_sync("x")
 
     async with async_playwright() as p:
         ctx = await launch_profile_context(p, platform, headless=False)
@@ -664,6 +985,9 @@ async def run_login(platform: str, timeout_sec: int = 180) -> Dict[str, Any]:
                 logged_in = True
                 break
             if platform == "wechat" and "mp.weixin.qq.com/cgi-bin/" in cur and "token=" in cur:
+                logged_in = True
+                break
+            if platform == "x" and "x.com/home" in cur:
                 logged_in = True
                 break
         await page.wait_for_timeout(2000)
@@ -727,9 +1051,9 @@ def main() -> None:
     sub.add_parser("status")
     sub.add_parser("keepalive")
     p_sync = sub.add_parser("sync")
-    p_sync.add_argument("--platform", default="all", choices=["all", "douyin", "channels", "channels_huixin", "channels_shanhe", "xhs", "wechat"])
+    p_sync.add_argument("--platform", default="all", choices=["all", "douyin", "channels", "channels_huixin", "channels_shanhe", "xhs", "wechat", "zsxq", "x"])
     p_login = sub.add_parser("login")
-    p_login.add_argument("--platform", required=True, choices=["douyin", "channels", "channels_huixin", "channels_shanhe", "xhs", "wechat"])
+    p_login.add_argument("--platform", required=True, choices=["douyin", "channels", "channels_huixin", "channels_shanhe", "xhs", "wechat", "x"])
     p_login.add_argument("--timeout", type=int, default=180)
     args = parser.parse_args()
 

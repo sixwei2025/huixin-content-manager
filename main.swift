@@ -604,6 +604,7 @@ struct ImportedPlatformSnapshot: Codable {
     @Published var channelsHuixinStatus = "尚未连接"
     @Published var channelsShanheStatus = "尚未连接"
     @Published var wechatStatus = "尚未连接"
+    @Published var zsxqStatus = "尚未连接"
     @Published var creatorSnapshots: [String: CreatorPlatformSnapshot] = [:]
     @Published var syncingCreatorKey: String?
     @Published var importedCounts: [String: Int] = [:]
@@ -677,7 +678,8 @@ struct ImportedPlatformSnapshot: Codable {
         .init(name: "视频号 · 汇芯袁总", symbol: "play.rectangle.fill", state: "创作者中心直连", detail: "二号 · 汇芯袁总（独立扫码会话）", color: .orange, docsURL: "https://channels.weixin.qq.com/platform"),
         .init(name: "视频号 · 山河来电", symbol: "play.rectangle.fill", state: "创作者中心直连", detail: "三号 · 山河来电（独立扫码会话）", color: .orange, docsURL: "https://channels.weixin.qq.com/platform"),
         .init(name: "小红书", symbol: "note.text", state: "创作者中心直连", detail: "支持扫码直连小红书创作者平台，或使用 CSV 自动同步", color: .red, docsURL: "https://creator.xiaohongshu.com/"),
-        .init(name: "X / Twitter", symbol: "at", state: "官方 API", detail: "使用 X Developer User Bearer Token 读取公开指标", color: .primary, docsURL: "https://developer.x.com/")
+        .init(name: "知识星球", symbol: "person.3.fill", state: "本地 CLI 直连", detail: "直接读取 Workbuddy一人公司营 成员、主题与最近动态", color: .purple, docsURL: "https://wx.zsxq.com/"),
+        .init(name: "X / Twitter", symbol: "at", state: "创作者网页直连", detail: "支持网页登录 X / Twitter 抓取粉丝、帖数与近期推文；也支持 Bearer Token", color: .primary, docsURL: "https://x.com/")
     ]
     let platforms: [Platform] = [
         .init(name: "公众号", symbol: "bubble.left.and.bubble.right.fill", color: .green, followers: "—", delta: "—", posts: "—", engagement: "—", source: "待连接"),
@@ -727,12 +729,24 @@ struct ImportedPlatformSnapshot: Codable {
     }
 
     var displayContents: [ContentItem] {
-        let colorMap: [String: Color] = ["公众号": .green, "小红书": .red, "视频号": .orange, "抖音": .black]
-        var realItems: [ContentItem] = []
-        for snap in creatorSnapshots.values where snap.ok {
-            for w in snap.items ?? [] {
-                realItems.append(ContentItem(title: w.title, platform: w.platform, status: w.status, views: w.views, likes: w.likes, conversion: "真实数据", color: colorMap[w.platform] ?? accent))
+        let colorMap: [String: Color] = ["公众号": .green, "小红书": .red, "视频号": .orange, "视频号 · 袁六伟": .orange, "视频号 · 汇芯袁总": .orange, "视频号 · 山河来电": .orange, "抖音": .black, "知识星球": .purple, "X": .primary]
+        let order = ["知识星球", "公众号", "小红书", "抖音", "X", "视频号 · 袁六伟", "视频号 · 汇芯袁总", "视频号 · 山河来电"]
+        let buckets: [[ContentItem]] = order.compactMap { name in
+            guard let snap = creatorSnapshots[name], snap.ok, let items = snap.items, !items.isEmpty else { return nil }
+            return items.map { w in
+                ContentItem(title: w.title, platform: w.platform, status: w.status, views: w.views, likes: w.likes, conversion: w.likes == "—" ? "真实数据" : "\(w.likes) 赞", color: colorMap[w.platform] ?? accent)
             }
+        }
+        var realItems: [ContentItem] = []
+        var idx = 0
+        while true {
+            var added = false
+            for b in buckets where idx < b.count {
+                realItems.append(b[idx])
+                added = true
+            }
+            if !added { break }
+            idx += 1
         }
         for d in wechatDrafts.prefix(4) {
             realItems.append(ContentItem(title: d.title, platform: "公众号", status: "草稿箱", views: "—", likes: "—", conversion: "\(d.articleCount) 篇", color: .green))
@@ -816,12 +830,14 @@ struct ImportedPlatformSnapshot: Codable {
         case "视频号 · 山河来电": channelsShanheStatus = msg
         case "小红书": xhsStatus = msg
         case "公众号", "微信公众号": wechatStatus = msg
+        case "知识星球": zsxqStatus = msg
+        case "X", "X / Twitter": xStatus = msg
         default: break
         }
     }
 
     private func setStatus(forKey key: String, _ msg: String) {
-        let map = ["douyin": "抖音", "channels": "视频号 · 袁六伟", "channels_huixin": "视频号 · 汇芯袁总", "channels_shanhe": "视频号 · 山河来电", "xhs": "小红书", "wechat": "公众号"]
+        let map = ["douyin": "抖音", "channels": "视频号 · 袁六伟", "channels_huixin": "视频号 · 汇芯袁总", "channels_shanhe": "视频号 · 山河来电", "xhs": "小红书", "wechat": "公众号", "zsxq": "知识星球", "x": "X"]
         if let name = map[key] { setStatus(forPlatform: name, msg) }
     }
 
@@ -1253,6 +1269,8 @@ struct Dashboard: View {
         case "视频号 · 汇芯袁总": return "channels_huixin"
         case "视频号 · 山河来电": return "channels_shanhe"
         case "小红书": return "xhs"
+        case "知识星球": return "zsxq"
+        case "X / Twitter": return "x"
         default: return nil
         }
     }
@@ -1262,6 +1280,7 @@ struct Dashboard: View {
         case "微信公众号": return store.wechatStatus
         case "X / Twitter": return store.xStatus
         case "小红书": return store.xhsStatus
+        case "知识星球": return store.zsxqStatus
         case "抖音": return store.douyinStatus
         case "视频号 · 袁六伟": return store.channelsStatus
         case "视频号 · 汇芯袁总": return store.channelsHuixinStatus
@@ -1362,7 +1381,7 @@ struct Dashboard: View {
             }.frame(maxWidth: .infinity, alignment: .leading)
             VStack(alignment: .leading, spacing: 8) {
                 Text("最近内容").font(.system(size: 14, weight: .semibold))
-                ForEach(store.displayContents.prefix(5)) { ContentRow(item: $0) }
+                ForEach(store.displayContents.prefix(8)) { ContentRow(item: $0) }
             }.padding(16).frame(maxWidth: .infinity, alignment: .leading).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
         }.padding(.top, 1)
     }
