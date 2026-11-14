@@ -149,6 +149,10 @@ final class CreatorBridge {
         guard let data = await run(args: ["login", "--platform", platform]) else { return nil }
         return try? JSONDecoder().decode(CreatorPlatformSnapshot.self, from: data)
     }
+
+    func keepalive() async {
+        _ = await run(args: ["keepalive"])
+    }
 }
 
 final class ProfileVault {
@@ -617,6 +621,7 @@ struct ImportedPlatformSnapshot: Codable {
     var importedCSVPaths: [String: String] = [:]
     private var importedCSVModifiedDates: [String: Date] = [:]
     private var csvRefreshTimer: Timer?
+    private var keepaliveTimer: Timer?
 
     init() {
         if vault.saved() != nil { vaultStatus = "已保存到本机钥匙串" }
@@ -631,6 +636,19 @@ struct ImportedPlatformSnapshot: Codable {
         refreshSavedCSVFiles(force: true)
         csvRefreshTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refreshSavedCSVFiles() }
+        }
+        // 每 30 分钟静默保活已登录的创作者中心会话（视频号/公众号/抖音/小红书），延长登录有效期
+        keepaliveTimer = Timer.scheduledTimer(withTimeInterval: 1800, repeats: true) { [weak self] _ in
+            Task { [weak self] in
+                guard let self else { return }
+                await self.bridge.keepalive()
+                let refreshed = self.bridge.loadCached()
+                await MainActor.run {
+                    for (_, snap) in refreshed where snap.ok {
+                        self.applyCreatorSnapshot(snap)
+                    }
+                }
+            }
         }
         if wechat.savedCredentials() != nil { wechatStatus = "已保存凭证 · 点击更新" }
         if x.savedCredentials() != nil { xStatus = "已保存凭证 · 点击更新" }

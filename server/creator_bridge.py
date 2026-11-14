@@ -603,7 +603,7 @@ async def sync_wechat(playwright) -> Dict[str, Any]:
         views = num_after(body, ["阅读次数", "昨日阅读", "阅读"])
         posts = num_after(body, ["已群发", "群发", "文章数"])
         lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
-        account_name = next((ln for ln in lines[:12] if 2 <= len(ln) <= 20 and "公众平台" not in ln and not re.fullmatch(r"[\d,.]+", ln)), "公众号")
+        account_name = next((ln for ln in lines[:15] if 2 <= len(ln) <= 20 and ln not in {"首页", "微信公众平台", "公众平台", "消息", "留言", "赞赏", "内容管理", "数据统计"} and "公众平台" not in ln and not re.fullmatch(r"[\d,.]+", ln)), "公众号")
 
         res.update({
             "ok": True,
@@ -686,6 +686,23 @@ async def run_sync(platform: str) -> Dict[str, Any]:
     return results if platform == "all" else results.get(platform, {"ok": False, "message": "未知平台"})
 
 
+async def run_keepalive() -> Dict[str, Any]:
+    """Silently refresh cookies/sessions for already logged-in profiles to extend login lifetime."""
+    cache = load_cache()
+    refreshed: Dict[str, Any] = {}
+    async with async_playwright() as p:
+        for key, handler in SYNC_HANDLERS.items():
+            # Only touch profiles that have previously succeeded or exist on disk
+            if key not in cache and not (PROFILES_DIR / key).exists() and key != "douyin":
+                continue
+            r = await handler(p)
+            refreshed[key] = {"ok": r.get("ok", False), "need_login": r.get("need_login", False)}
+            if r.get("ok"):
+                cache[key] = r
+    save_cache(cache)
+    return refreshed
+
+
 def cmd_status() -> Dict[str, Any]:
     cache = load_cache()
     out: Dict[str, Any] = {"cache": cache, "cdp": {}}
@@ -703,6 +720,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="汇芯内容管家 · 本机创作者中心直连桥接器")
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("status")
+    sub.add_parser("keepalive")
     p_sync = sub.add_parser("sync")
     p_sync.add_argument("--platform", default="all", choices=["all", "douyin", "channels", "channels_huixin", "channels_shanhe", "xhs", "wechat"])
     p_login = sub.add_parser("login")
@@ -712,6 +730,9 @@ def main() -> None:
 
     if args.cmd == "status":
         print(json.dumps(cmd_status(), ensure_ascii=False))
+    elif args.cmd == "keepalive":
+        res = asyncio.run(run_keepalive())
+        print(json.dumps(res, ensure_ascii=False))
     elif args.cmd == "sync":
         res = asyncio.run(run_sync(args.platform))
         print(json.dumps(res, ensure_ascii=False))
