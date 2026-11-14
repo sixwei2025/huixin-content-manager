@@ -1,5 +1,11 @@
 # 更新记录
 
+## v0.1.13 · 2026-11-14
+
+- 本地构建改用现有 Apple Development 签名，不再使用临时 adhoc 签名
+- 为钥匙串访问建立稳定的应用身份，减少版本更新后的重复授权提示
+- 支持通过 `HUIXIN_SIGNING_IDENTITY` 切换到 Developer ID Application 签名
+
 ## v0.1.12 · 2026-11-14
 
 - CSV 导入从一次性读取升级为“绑定文件”
