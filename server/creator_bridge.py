@@ -103,6 +103,20 @@ def parse_cn_number(raw: str) -> Optional[int]:
     return int(round(val))
 
 
+def num_before(text: str, labels: List[str], window: int = 40) -> Optional[int]:
+    for label in labels:
+        idx = text.find(label)
+        if idx <= 0:
+            continue
+        chunk = text[max(0, idx - window) : idx]
+        matches = re.findall(r"([+-]?\d[\d,]*(?:\.\d+)?\s*(?:亿|万|w|W|k|K)?)", chunk)
+        if matches:
+            parsed = parse_cn_number(matches[-1])
+            if parsed is not None:
+                return parsed
+    return None
+
+
 def num_after(text: str, labels: List[str], window: int = 80) -> Optional[int]:
     for label in labels:
         idx = text.find(label)
@@ -172,7 +186,7 @@ async def sync_douyin(playwright) -> Dict[str, Any]:
         await page.wait_for_timeout(4000)
 
         url = page.url or ""
-        body = await page.locator("body").inner_text()
+        body = await page.locator("body").first.inner_text()
         if "login" in url.lower() or "扫码登录" in body or "验证码登录" in body:
             res["need_login"] = True
             res["message"] = "需要抖音扫码登录"
@@ -386,21 +400,17 @@ async def sync_channels(playwright) -> Dict[str, Any]:
         "updated_at": now_iso(),
         "items": [],
     }
-    # Prefer live CDP daemon if running
+    # Prefer live CDP daemon ONLY if it is already logged in
     live_port = None
     live_name = None
     for name, port in CHANNEL_CDP_PORTS:
         if cdp_is_alive(port):
             tabs = cdp_tabs(port)
-            # Prefer a tab that is already logged in (not login.html)
             logged_tabs = [t for t in tabs if "channels.weixin.qq.com" in (t.get("url") or "") and "login" not in (t.get("url") or "")]
             if logged_tabs:
                 live_port = port
                 live_name = name
                 break
-            if live_port is None:
-                live_port = port
-                live_name = name
 
     browser = None
     ctx = None
@@ -422,29 +432,59 @@ async def sync_channels(playwright) -> Dict[str, Any]:
             await page.wait_for_timeout(3500)
 
         url = page.url or ""
-        body = await page.locator("body").inner_text()
+        body = await page.locator("body").first.inner_text()
         if "login" in url.lower() or "微信扫码" in body or "登录视频号助手" in body:
             res["need_login"] = True
             res["message"] = f"需要微信扫码登录（视频号助手{f' · {live_name}' if live_name else ''}）"
             return res
 
-        fans = num_after(body, ["粉丝数", "关注人数", "粉丝"])
-        views = num_after(body, ["播放量", "浏览量", "总播放"])
-        likes = num_after(body, ["点赞", "喜欢"])
-        comments = num_after(body, ["评论"])
-        shares = num_after(body, ["分享", "转发"])
-        posts = num_after(body, ["发表内容", "视频数", "作品数"])
+        # Extract account name and metrics from 视频号助手首页
+        lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
+        account_name = next((ln for ln in lines[:15] if 2 <= len(ln) <= 20 and "视频号" not in ln and not re.fullmatch(r"[\d,.]+", ln) and ln not in {"首页", "内容管理", "数据中心", "直播", "私信", "评论"}), "")
+        fans = num_after(body, ["关注者", "关注人数", "粉丝数", "总关注人数"])
+        delta = num_after(body, ["净增关注", "净增粉丝"])
+        views = num_after(body, ["新增播放", "播放量", "浏览量", "总播放"])
+        likes = num_after(body, ["新增\n", "新增点赞", "点赞", "喜欢"])
+        comments = num_after(body, ["新增评论", "评论"])
+        shares = num_after(body, ["新增分享", "分享", "转发"])
+        posts = num_after(body, ["视频", "发表内容", "视频数", "作品数"])
+
+        # Try fetching recent posts from 视频号内容管理
+        items: List[Dict[str, Any]] = []
+        try:
+            await page.goto(PLATFORM_URLS["channels"]["list"], wait_until="domcontentloaded", timeout=25000)
+            await page.wait_for_timeout(3000)
+            raw_items = await page.evaluate(
+                """() => {
+                    const out = [];
+                    const cards = document.querySelectorAll('.post-list-item, [class*="feed-item"], [class*="post-item"], [class*="video-item"]');
+                    for (const c of cards) {
+                        const t = (c.innerText || '').trim();
+                        if (!t || t.length < 4) continue;
+                        const ls = t.split('\\n').map(x => x.trim()).filter(Boolean);
+                        if (ls.length >= 1) out.push({ title: ls[0].slice(0, 60) });
+                        if (out.length >= 5) break;
+                    }
+                    return out;
+                }"""
+            )
+            for it in raw_items or []:
+                items.append({"title": it.get("title", "视频号动态"), "platform": "视频号", "status": "已发布", "views": "—", "likes": "—"})
+        except Exception:
+            pass
 
         res.update({
             "ok": True,
-            "account": live_name or "视频号创作者",
+            "account": account_name or live_name or "视频号创作者",
             "followers": fans,
-            "posts": posts,
+            "delta": delta,
+            "posts": posts if posts is not None else (len(items) if items else None),
             "views": views,
             "likes": likes,
             "comments": comments,
             "shares": shares,
-            "message": f"已连接 · {live_name or '视频号助手'}",
+            "items": items,
+            "message": f"已连接 · {account_name or live_name or '视频号助手'}",
         })
         return res
     except Exception as e:
@@ -475,25 +515,29 @@ async def sync_xhs(playwright) -> Dict[str, Any]:
         await page.wait_for_timeout(3500)
 
         url = page.url or ""
-        body = await page.locator("body").inner_text()
+        body = await page.locator("body").first.inner_text()
         if "login" in url.lower() or "短信登录" in body or "扫码登录" in body:
             res["need_login"] = True
             res["message"] = "需要小红书扫码登录"
             return res
 
-        fans = num_after(body, ["粉丝数", "粉丝"])
-        likes = num_after(body, ["获赞与收藏", "获赞", "点赞"])
-        views = num_after(body, ["阅读量", "曝光量", "观看"])
-        posts = num_after(body, ["笔记数", "已发布"])
+        lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
+        account_name = next((ln for ln in lines[:10] if 2 <= len(ln) <= 20 and ln not in {"创作服务平台", "发布笔记", "首页", "笔记管理", "Builder hub", "小工具", "Red Skill", "数据看板", "活动中心"}), "小红书创作者")
+        fans = num_before(body, ["粉丝数"]) or num_after(body, ["粉丝数", "粉丝"])
+        likes = num_before(body, ["获赞与收藏"]) or num_after(body, ["获赞与收藏", "获赞"])
+        overview_idx = body.find("笔记数据总览")
+        ov_text = body[overview_idx:] if overview_idx >= 0 else body
+        views = num_after(ov_text, ["曝光量", "观看量", "阅读量", "总曝光"])
+        posts = num_after(ov_text, ["发布笔记", "笔记数", "已发布"])
 
         res.update({
             "ok": True,
-            "account": "小红书创作者",
+            "account": account_name,
             "followers": fans,
             "posts": posts,
             "views": views,
             "likes": likes,
-            "message": "已连接 · 小红书创作者平台",
+            "message": f"已连接 · {account_name}",
         })
         return res
     except Exception as e:
