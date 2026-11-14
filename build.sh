@@ -15,13 +15,20 @@ cat > "$OUT/Contents/Info.plist" <<'PLIST'
 <key>CFBundleName</key><string>汇芯 内容创业管家</string>
 <key>CFBundleDisplayName</key><string>汇芯 内容创业管家</string>
 <key>CFBundleExecutable</key><string>HuixinContentManager</string>
-<key>CFBundleShortVersionString</key><string>0.1.12</string>
+<key>CFBundleShortVersionString</key><string>0.1.13</string>
 <key>CFBundleVersion</key><string>1</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>LSUIElement</key><true/>
 <key>LSMultipleInstancesProhibited</key><true/>
 </dict></plist>
 PLIST
-codesign --force --sign - "$OUT"
+SIGNING_IDENTITY="${HUIXIN_SIGNING_IDENTITY:-Apple Development: 961443754@qq.com (H3WZLUYD47)}"
+if security find-identity -v -p codesigning | grep -Fq "\"$SIGNING_IDENTITY\""; then
+  codesign --force --options runtime --sign "$SIGNING_IDENTITY" "$OUT"
+else
+  echo "未找到稳定签名身份：$SIGNING_IDENTITY" >&2
+  echo "可用 HUIXIN_SIGNING_IDENTITY 指定 Developer ID Application 身份。" >&2
+  exit 2
+fi
 echo "$OUT"
 
