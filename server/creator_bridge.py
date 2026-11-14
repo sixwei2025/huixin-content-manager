@@ -205,23 +205,30 @@ async def sync_douyin(playwright) -> Dict[str, Any]:
             return res
 
         # Extract account name and home summary
-        skip_nav = {"作品发布", "首页", "内容管理", "数据中心", "收入变现", "高清发布", "创作服务", "灵感中心", "活动中心", "创作者学习中心"}
+        skip_nav = {"作品发布", "首页", "内容管理", "数据中心", "收入变现", "高清发布", "创作服务", "灵感中心", "活动中心", "创作者学习中心", "AI分身", "随变", "世界书", "造世界", "AI工坊", "智能创作"}
         lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
-        account_name = next((ln for ln in lines[:20] if 2 <= len(ln) <= 20 and ln not in skip_nav and not re.fullmatch(r"[\d,.万wWkK+%:：-]+", ln)), "")
+        account_name = ""
+        for idx, ln in enumerate(lines):
+            if ln.startswith("抖音号：") and idx > 0:
+                account_name = lines[idx - 1]
+                break
+        if not account_name:
+            account_name = next((ln for ln in lines[:25] if 2 <= len(ln) <= 20 and ln not in skip_nav and not re.fullmatch(r"[\d,.万wWkK+%:：-]+", ln)), "")
 
-        fans = num_after(body, ["总粉丝量", "粉丝数", "粉丝总量", "粉丝"])
+        fans = num_after(body, ["粉丝指数", "总粉丝量", "粉丝数", "粉丝总量", "粉丝"])
         likes = num_after(body, ["获赞", "总点赞量", "点赞"])
 
         # Go to operation data center for yesterday/7d metrics
         await page.goto(PLATFORM_URLS["douyin"]["op"], wait_until="domcontentloaded", timeout=35000)
         await page.wait_for_timeout(4500)
-        op_body = await page.locator("body").inner_text()
+        op_body = await page.locator("body").first.inner_text()
         if "login" in (page.url or "").lower() or "扫码登录" in op_body:
             res["need_login"] = True
             res["message"] = "需要抖音扫码登录"
             return res
 
-        fans = num_after(op_body, ["总粉丝量", "粉丝总量"]) or fans
+        if fans is None:
+            fans = num_after(op_body, ["总粉丝量", "粉丝总量"])
         delta = num_after(op_body, ["粉丝净增", "净增粉丝", "新增粉丝"])
         views = num_after(op_body, ["总播放量", "播放量", "作品播放"])
         likes = num_after(op_body, ["总点赞量", "点赞量"]) or likes

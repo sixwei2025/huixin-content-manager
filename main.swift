@@ -1354,18 +1354,16 @@ struct Dashboard: View {
                     }
                 }.padding(16).frame(width: 270, alignment: .leading).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
             }
-            HStack(alignment: .top, spacing: 14) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("平台表现").font(.system(size: 14, weight: .semibold))
-                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-                        ForEach(store.displayPlatforms) { PlatformCard(item: $0) }
-                    }
-                }.frame(maxWidth: .infinity)
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("最近内容").font(.system(size: 14, weight: .semibold))
-                    ForEach(store.displayContents.prefix(4)) { ContentRow(item: $0) }
-                }.padding(16).frame(width: 390, alignment: .leading).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
-            }
+            VStack(alignment: .leading, spacing: 8) {
+                Text("平台表现").font(.system(size: 14, weight: .semibold))
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                    ForEach(store.displayPlatforms) { PlatformCard(item: $0) }
+                }
+            }.frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("最近内容").font(.system(size: 14, weight: .semibold))
+                ForEach(store.displayContents.prefix(5)) { ContentRow(item: $0) }
+            }.padding(16).frame(maxWidth: .infinity, alignment: .leading).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
         }.padding(.top, 1)
     }
     func insight(_ title: String, _ detail: String, _ color: Color) -> some View { HStack(alignment: .top, spacing: 8) { Circle().fill(color).frame(width: 7, height: 7).padding(.top, 4); VStack(alignment: .leading, spacing: 3) { Text(title).font(.system(size: 11, weight: .semibold)); Text(detail).font(.system(size: 10)).foregroundStyle(.secondary) } } }
