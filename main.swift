@@ -42,6 +42,115 @@ struct DouyinSummary {
     var newFans: Int
 }
 
+struct CreatorWorkItem: Codable {
+    let title: String
+    let platform: String
+    let status: String
+    let views: String
+    let likes: String
+}
+
+struct CreatorPlatformSnapshot: Codable {
+    let platform: String
+    let key: String
+    let ok: Bool
+    let need_login: Bool?
+    let source: String?
+    let updated_at: String?
+    let account: String?
+    let followers: Int?
+    let delta: Int?
+    let posts: Int?
+    let views: Int?
+    let likes: Int?
+    let comments: Int?
+    let shares: Int?
+    let saves: Int?
+    let items: [CreatorWorkItem]?
+    let message: String?
+
+    var engagementText: String {
+        guard let views, views > 0 else { return "—" }
+        let interactions = (likes ?? 0) + (comments ?? 0) + (shares ?? 0) + (saves ?? 0)
+        return String(format: "%.1f%%", Double(interactions) / Double(views) * 100)
+    }
+}
+
+final class CreatorBridge {
+    private let cacheURL = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent(".huixin-content-manager/cache/platform_metrics.json")
+
+    private func pythonPath() -> String {
+        let candidates = [
+            FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("GrokBridge/视频号/venv/bin/python").path,
+            "/opt/homebrew/bin/python3.11",
+            "/opt/homebrew/bin/python3",
+            "/usr/bin/python3"
+        ]
+        return candidates.first { FileManager.default.isExecutableFile(atPath: $0) } ?? "/usr/bin/python3"
+    }
+
+    private func scriptPath() -> String? {
+        if let res = Bundle.main.resourcePath {
+            let bundled = URL(fileURLWithPath: res).appendingPathComponent("creator_bridge.py").path
+            if FileManager.default.fileExists(atPath: bundled) { return bundled }
+        }
+        let repo = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Workbuddy/github-skills-14/huixin-content-manager/server/creator_bridge.py").path
+        return FileManager.default.fileExists(atPath: repo) ? repo : nil
+    }
+
+    func loadCached() -> [String: CreatorPlatformSnapshot] {
+        guard let data = try? Data(contentsOf: cacheURL),
+              let dict = try? JSONDecoder().decode([String: CreatorPlatformSnapshot].self, from: data) else {
+            return [:]
+        }
+        return dict
+    }
+
+    func run(args: [String]) async -> Data? {
+        guard let script = scriptPath() else { return nil }
+        let python = pythonPath()
+        return await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let proc = Process()
+                proc.executableURL = URL(fileURLWithPath: python)
+                proc.arguments = [script] + args
+                let outPipe = Pipe()
+                let errPipe = Pipe()
+                proc.standardOutput = outPipe
+                proc.standardError = errPipe
+                do {
+                    try proc.run()
+                    let data = outPipe.fileHandleForReading.readDataToEndOfFile()
+                    proc.waitUntilExit()
+                    continuation.resume(returning: data)
+                } catch {
+                    continuation.resume(returning: nil)
+                }
+            }
+        }
+    }
+
+    func sync(platform: String) async -> CreatorPlatformSnapshot? {
+        guard let data = await run(args: ["sync", "--platform", platform]) else { return nil }
+        return try? JSONDecoder().decode(CreatorPlatformSnapshot.self, from: data)
+    }
+
+    func syncAll() async -> [String: CreatorPlatformSnapshot] {
+        guard let data = await run(args: ["sync", "--platform", "all"]),
+              let dict = try? JSONDecoder().decode([String: CreatorPlatformSnapshot].self, from: data) else {
+            return [:]
+        }
+        return dict
+    }
+
+    func login(platform: String) async -> CreatorPlatformSnapshot? {
+        guard let data = await run(args: ["login", "--platform", platform]) else { return nil }
+        return try? JSONDecoder().decode(CreatorPlatformSnapshot.self, from: data)
+    }
+}
+
 final class ProfileVault {
     private let service = "cn.huixin.contentmanager.profile"
 
@@ -489,7 +598,10 @@ struct ImportedPlatformSnapshot: Codable {
     @Published var xhsStatus = "尚未连接"
     @Published var douyinSummary: DouyinSummary?
     @Published var douyinStatus = "尚未连接"
+    @Published var channelsStatus = "尚未连接"
     @Published var wechatStatus = "尚未连接"
+    @Published var creatorSnapshots: [String: CreatorPlatformSnapshot] = [:]
+    @Published var syncingCreatorKey: String?
     @Published var importedCounts: [String: Int] = [:]
     @Published var importedMetrics: [String: ImportedPlatformMetrics] = [:]
     @Published var dataSource = "演示数据 · 尚未连接平台"
@@ -500,6 +612,7 @@ struct ImportedPlatformSnapshot: Codable {
     private let bili = BiliConnector()
     private let xhs = XHSConnector()
     private let douyin = DouyinConnector()
+    private let bridge = CreatorBridge()
     private let importedDataKey = "cn.huixin.contentmanager.imported-platform-data"
     private let importedCSVPathsKey = "cn.huixin.contentmanager.imported-csv-paths"
     var importedCSVPaths: [String: String] = [:]
@@ -525,6 +638,10 @@ struct ImportedPlatformSnapshot: Codable {
         if bili.savedCredentials() != nil { biliStatus = "已保存凭证 · 点击更新" }
         if xhs.savedCredentials() != nil { xhsStatus = "已保存凭证 · 点击更新" }
         if douyin.savedCredentials() != nil { douyinStatus = "已保存凭证 · 点击更新" }
+        let cached = bridge.loadCached()
+        for (_, snap) in cached where snap.ok {
+            applyCreatorSnapshot(snap)
+        }
     }
 
     func savedProfile() -> (phone: String, email: String, company: String, contact: String) {
@@ -538,12 +655,12 @@ struct ImportedPlatformSnapshot: Codable {
 
     let tabs = ["总览", "内容", "平台", "复盘"]
     let connections: [PlatformConnection] = [
-        .init(name: "微信公众号", symbol: "bubble.left.and.bubble.right.fill", state: "已具备接口", detail: "需要 AppID、AppSecret 和 IP 白名单", color: .green, docsURL: "https://developers.weixin.qq.com/doc/offiaccount/Basic_Information/Get_access_token.html"),
-        .init(name: "抖音", symbol: "music.note", state: "待配置应用", detail: "官方 OAuth + 视频数据权限，需开放平台审核", color: .black, docsURL: "https://open.douyin.com/"),
-        .init(name: "B站", symbol: "tv.fill", state: "待核实权限", detail: "先保留官方开放平台入口和 CSV 导入", color: .blue, docsURL: "https://openhome.bilibili.com/"),
-        .init(name: "X / Twitter", symbol: "at", state: "待配置应用", detail: "需要 X Developer 应用和 OAuth 用户授权", color: .primary, docsURL: "https://developer.x.com/"),
-        .init(name: "小红书", symbol: "note.text", state: "待配置应用", detail: "官方开放能力依赖主体与应用审核", color: .red, docsURL: "https://open.xiaohongshu.com/"),
-        .init(name: "视频号", symbol: "play.rectangle.fill", state: "暂用导入", detail: "先保留手动导入，避免绕过平台限制", color: .orange, docsURL: nil)
+        .init(name: "微信公众号", symbol: "bubble.left.and.bubble.right.fill", state: "已具备接口", detail: "支持 AppID/AppSecret + 腾讯云中继读取昨日数据与草稿箱", color: .green, docsURL: "https://developers.weixin.qq.com/doc/offiaccount/Basic_Information/Get_access_token.html"),
+        .init(name: "抖音", symbol: "music.note", state: "创作者中心直连", detail: "支持扫码直连抖音创作者中心，无需企业开放平台审核；也支持 Open API", color: .black, docsURL: "https://creator.douyin.com/"),
+        .init(name: "B站", symbol: "tv.fill", state: "创作者中心直连", detail: "支持扫码直连 B 站创作中心，自动读取粉丝、播放与近期稿件", color: .blue, docsURL: "https://member.bilibili.com/platform/home"),
+        .init(name: "视频号", symbol: "play.rectangle.fill", state: "创作者中心直连", detail: "自动探测本机视频号助手守护进程或扫码登录，支持 CSV 补充", color: .orange, docsURL: "https://channels.weixin.qq.com/platform"),
+        .init(name: "小红书", symbol: "note.text", state: "创作者中心直连", detail: "支持扫码直连小红书创作者平台，或使用 CSV 自动同步", color: .red, docsURL: "https://creator.xiaohongshu.com/"),
+        .init(name: "X / Twitter", symbol: "at", state: "官方 API", detail: "使用 X Developer User Bearer Token 读取公开指标", color: .primary, docsURL: "https://developer.x.com/")
     ]
     let platforms: [Platform] = [
         .init(name: "公众号", symbol: "bubble.left.and.bubble.right.fill", color: .green, followers: "12,680", delta: "+386", posts: "18", engagement: "8.6%", source: "演示数据"),
@@ -557,6 +674,14 @@ struct ImportedPlatformSnapshot: Codable {
 
     var displayPlatforms: [Platform] {
         platforms.map { item in
+            if let snap = creatorSnapshots[item.name], snap.ok {
+                return Platform(name: item.name, symbol: item.symbol, color: item.color,
+                                followers: snap.followers.map(format) ?? "—",
+                                delta: snap.delta.map { $0 >= 0 ? "+\(format($0))" : format($0) } ?? "—",
+                                posts: snap.posts.map(format) ?? "—",
+                                engagement: snap.engagementText,
+                                source: snap.source ?? "\(item.name)创作者中心")
+            }
             if let imported = importedMetrics[item.name] {
                 return Platform(name: item.name, symbol: item.symbol, color: item.color,
                                 followers: imported.followers.map(format) ?? "—",
@@ -582,6 +707,71 @@ struct ImportedPlatformSnapshot: Codable {
         }
     }
 
+    var displayContents: [ContentItem] {
+        let colorMap: [String: Color] = ["公众号": .green, "小红书": .red, "视频号": .orange, "抖音": .black, "B站": .blue]
+        var realItems: [ContentItem] = []
+        for snap in creatorSnapshots.values where snap.ok {
+            for w in snap.items ?? [] {
+                realItems.append(ContentItem(title: w.title, platform: w.platform, status: w.status, views: w.views, likes: w.likes, conversion: "真实数据", color: colorMap[w.platform] ?? accent))
+            }
+        }
+        for d in wechatDrafts.prefix(4) {
+            realItems.append(ContentItem(title: d.title, platform: "公众号", status: "草稿箱", views: "—", likes: "—", conversion: "\(d.articleCount) 篇", color: .green))
+        }
+        return realItems.isEmpty ? contents : realItems
+    }
+
+    var hasRealData: Bool {
+        creatorSnapshots.values.contains(where: \.ok) || !importedMetrics.isEmpty || wechatSummary != nil || douyinSummary != nil || xSummary != nil
+    }
+
+    var overviewMetrics: (followers: String, followersDelta: String, posts: String, postsDelta: String, views: String, viewsDelta: String, engagement: String, engagementDelta: String) {
+        guard hasRealData else {
+            return ("68,972", "↑ 本月 +2,365 · 演示汇总", "110 条", "↑ 比上月多 18 条 · 演示汇总", "286.4 万", "↑ 本月 +31.8% · 演示汇总", "9.8%", "↑ 知识星球表现最好 · 演示汇总")
+        }
+        var totalFollowers = 0
+        var totalDelta = 0
+        var totalPosts = 0
+        var totalViews = 0
+        var totalInteractions = 0
+        var connectedCount = 0
+        for snap in creatorSnapshots.values where snap.ok {
+            connectedCount += 1
+            totalFollowers += snap.followers ?? 0
+            totalDelta += snap.delta ?? 0
+            totalPosts += snap.posts ?? 0
+            totalViews += snap.views ?? 0
+            totalInteractions += (snap.likes ?? 0) + (snap.comments ?? 0) + (snap.shares ?? 0) + (snap.saves ?? 0)
+        }
+        for m in importedMetrics.values {
+            connectedCount += 1
+            totalFollowers += m.followers ?? 0
+            totalDelta += m.delta ?? 0
+            totalPosts += m.posts ?? 0
+            totalViews += m.views ?? 0
+            totalInteractions += (m.likes ?? 0) + (m.comments ?? 0) + (m.shares ?? 0) + (m.saves ?? 0)
+        }
+        if let w = wechatSummary {
+            connectedCount += 1
+            totalFollowers += w.followers
+            totalDelta += w.newFollowers
+            totalViews += w.articleReads
+            totalInteractions += w.articleShares
+        }
+        let eng = totalViews > 0 ? String(format: "%.1f%%", Double(totalInteractions) / Double(totalViews) * 100) : "—"
+        let viewsStr = totalViews >= 10_000 ? String(format: "%.1f 万", Double(totalViews) / 10_000.0) : format(totalViews)
+        return (
+            format(totalFollowers),
+            "↑ 近期净增 \(totalDelta >= 0 ? "+" : "")\(format(totalDelta)) · 已连 \(connectedCount) 平台",
+            "\(format(totalPosts)) 条",
+            "已同步真实平台作品 · 真实汇总",
+            viewsStr,
+            "已接入平台播放/阅读 · 真实汇总",
+            eng,
+            "互动率（赞评转藏/播放）· 真实汇总"
+        )
+    }
+
     let contents: [ContentItem] = [
         .init(title: "AI 也会做梦了？Claude 记忆拆解", platform: "公众号", status: "已发布", views: "6,768", likes: "382", conversion: "9.8%", color: .green),
         .init(title: "我用一个小流程，把 536 个技能管明白了", platform: "小红书", status: "已发布", views: "12,480", likes: "1,106", conversion: "12.4%", color: .red),
@@ -600,7 +790,64 @@ struct ImportedPlatformSnapshot: Codable {
         }
     }
 
+    private func applyCreatorSnapshot(_ snap: CreatorPlatformSnapshot) {
+        let name = snap.platform
+        if snap.ok {
+            creatorSnapshots[name] = snap
+            let msg = snap.message ?? "已连接 · \(snap.source ?? name)"
+            if name == "抖音" { douyinStatus = msg }
+            else if name == "B站" { biliStatus = msg }
+            else if name == "视频号" { channelsStatus = msg }
+            else if name == "小红书" { xhsStatus = msg }
+            dataSource = "已接入创作者中心真实数据 · 未连接平台保留演示或 CSV"
+        } else if let msg = snap.message, !msg.isEmpty {
+            if name == "抖音" { douyinStatus = msg }
+            else if name == "B站" { biliStatus = msg }
+            else if name == "视频号" { channelsStatus = msg }
+            else if name == "小红书" { xhsStatus = msg }
+        }
+    }
+
+    func syncCreator(key: String) {
+        syncingCreatorKey = key
+        let displayName = key == "douyin" ? "抖音" : key == "bilibili" ? "B站" : key == "channels" ? "视频号" : "小红书"
+        if key == "douyin" { douyinStatus = "正在同步抖音创作者中心…" }
+        else if key == "bilibili" { biliStatus = "正在同步 B 站创作中心…" }
+        else if key == "channels" { channelsStatus = "正在探测视频号助手…" }
+        else if key == "xhs" { xhsStatus = "正在同步小红书创作者平台…" }
+        Task {
+            if let snap = await bridge.sync(platform: key) {
+                applyCreatorSnapshot(snap)
+            } else {
+                let err = "\(displayName)同步脚本调用失败"
+                if key == "douyin" { douyinStatus = err }
+                else if key == "bilibili" { biliStatus = err }
+                else if key == "channels" { channelsStatus = err }
+                else if key == "xhs" { xhsStatus = err }
+            }
+            syncingCreatorKey = nil
+        }
+    }
+
+    func loginCreator(key: String) {
+        syncingCreatorKey = key
+        if key == "douyin" { douyinStatus = "请在弹出的窗口中扫码登录抖音…" }
+        else if key == "bilibili" { biliStatus = "请在弹出的窗口中扫码登录 B 站…" }
+        else if key == "channels" { channelsStatus = "请在弹出的窗口中微信扫码登录视频号…" }
+        else if key == "xhs" { xhsStatus = "请在弹出的窗口中扫码登录小红书…" }
+        Task {
+            if let snap = await bridge.login(platform: key) {
+                applyCreatorSnapshot(snap)
+            }
+            syncingCreatorKey = nil
+        }
+    }
+
     private func refreshSavedConnections() async {
+        let creatorResults = await bridge.syncAll()
+        for (_, snap) in creatorResults {
+            applyCreatorSnapshot(snap)
+        }
         if let credentials = wechat.savedCredentials() {
             do {
                 wechatSummary = try await wechat.fetchSummary(appID: credentials.0, secret: credentials.1)
@@ -968,12 +1215,12 @@ struct Dashboard: View {
         VStack(spacing: 15) {
             HStack(spacing: 11) {
                 Text("汇芯").font(.system(size: 15, weight: .bold)).foregroundStyle(.white).padding(9).background(accent, in: RoundedRectangle(cornerRadius: 10))
-                VStack(alignment: .leading, spacing: 2) { Text("内容创业管家").font(.system(size: 21, weight: .bold)); Text("看清内容表现，知道下一步做什么").font(.system(size: 11)).foregroundStyle(.secondary) }
+                VStack(alignment: .leading, spacing: 2) { Text("内容管家").font(.system(size: 21, weight: .bold)); Text("多平台创作者数据直连 · 袁六伟 · 台州汇芯").font(.system(size: 11)).foregroundStyle(.secondary) }
                 Spacer()
                 Button { store.refresh() } label: { Label(store.refreshing ? "更新中" : "更新", systemImage: "arrow.clockwise") }.controlSize(.small).disabled(store.refreshing)
                 Button("信息保险库") { let profile = store.savedProfile(); vaultPhone = profile.phone; vaultEmail = profile.email; vaultCompany = profile.company; vaultContact = profile.contact; vaultSheet = true }.controlSize(.small)
                 Button("连接平台") { connectionSheet = true }.controlSize(.small)
-                Menu { Button("导出平台报告") { store.exportReport() }; Button("使用说明") { about = true }; Button("打开独立窗口") { (NSApp.delegate as? AppDelegate)?.showWindow() }; Divider(); Button("退出汇芯 内容创业管家") { NSApp.terminate(nil) } } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).frame(width: 24)
+                Menu { Button("导出平台报告") { store.exportReport() }; Button("使用说明") { about = true }; Button("打开独立窗口") { (NSApp.delegate as? AppDelegate)?.showWindow() }; Divider(); Button("退出汇芯内容管家") { NSApp.terminate(nil) } } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).frame(width: 24)
             }
             Picker("", selection: $store.selectedTab) { ForEach(store.tabs, id: \.self) { Text($0).tag($0) } }.pickerStyle(.segmented)
             ScrollView {
@@ -986,15 +1233,133 @@ struct Dashboard: View {
         }.padding(20).frame(width: 900, height: 650).background(Color(nsColor: .windowBackgroundColor)).sheet(isPresented: $about) { Text("汇芯内容创业管家\n官方优先接入公众号草稿箱和可用数据；其他平台支持授权或 CSV 导入。\n\n袁六伟 · 台州汇芯").font(.system(size: 13)).multilineTextAlignment(.leading).padding(28).frame(width: 430) }.sheet(isPresented: $vaultSheet) { vaultForm }.sheet(isPresented: $wechatSheet) { wechatForm }.sheet(isPresented: $xSheet) { xForm }.sheet(isPresented: $biliSheet) { biliForm }.sheet(isPresented: $xhsSheet) { xhsForm }.sheet(isPresented: $douyinSheet) { douyinForm }.sheet(isPresented: $connectionSheet) { connectionForm }
     }
     var vaultForm: some View { VStack(alignment: .leading, spacing: 14) { Text("信息保险库").font(.title2.bold()); Text("常用资料只保存在本机 macOS 钥匙串，方便后续填写平台申请表。不会自动上传证件，也不会写入 GitHub。").font(.system(size: 12)).foregroundStyle(.secondary); TextField("手机号", text: $vaultPhone).textFieldStyle(.roundedBorder); TextField("联系邮箱", text: $vaultEmail).textFieldStyle(.roundedBorder); TextField("公司主体全称", text: $vaultCompany).textFieldStyle(.roundedBorder); TextField("联系人姓名", text: $vaultContact).textFieldStyle(.roundedBorder); Text("状态：\(store.vaultStatus)").font(.system(size: 11)).foregroundStyle(.secondary); HStack { Spacer(); Button("取消") { vaultSheet = false }; Button("保存到本机") { store.saveProfile(phone: vaultPhone, email: vaultEmail, company: vaultCompany, contact: vaultContact); vaultSheet = false }.keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent) } }.padding(24).frame(width: 540) }
-    var connectionForm: some View { VStack(alignment: .leading, spacing: 14) { Text("平台连接中心").font(.title2.bold()); Text("每个平台单独授权，数据来源和权限状态清楚可见。官方接口未开放时，可绑定后台导出的 CSV，文件变化后自动同步。").font(.system(size: 12)).foregroundStyle(.secondary); ForEach(store.connections) { item in HStack(spacing: 12) { Image(systemName: item.symbol).foregroundStyle(item.color).frame(width: 24); VStack(alignment: .leading, spacing: 3) { Text(item.name).font(.system(size: 12, weight: .semibold)); Text(item.detail).font(.system(size: 10)).foregroundStyle(.secondary); if store.importedCounts[item.name] != nil { Text(store.importedCSVPaths[item.name] != nil ? "CSV 自动同步" : "已导入记录").font(.system(size: 10, weight: .medium)).foregroundStyle(.green) } }; Spacer(); Text(item.name == "微信公众号" ? store.wechatStatus : item.name == "X / Twitter" ? store.xStatus : item.name == "B站" ? store.biliStatus : item.name == "小红书" ? store.xhsStatus : item.name == "抖音" ? store.douyinStatus : item.state).font(.system(size: 10, weight: .medium)).foregroundStyle((item.name == "微信公众号" && store.wechatStatus.hasPrefix("已连接")) || (item.name == "X / Twitter" && store.xStatus.hasPrefix("已连接")) || (item.name == "B站" && store.biliStatus.hasPrefix("已连接")) || (item.name == "小红书" && store.xhsStatus.hasPrefix("已连接")) || (item.name == "抖音" && store.douyinStatus.hasPrefix("已连接")) ? .green : .secondary); if item.name == "微信公众号" { Button("设置") { connectionSheet = false; wechatSheet = true } } else if item.name == "X / Twitter" { Button("设置") { connectionSheet = false; xSheet = true }; if let url = item.docsURL { Button("官方入口") { NSWorkspace.shared.open(URL(string: url)!) } }; Button("导入 CSV") { store.importCSV(for: item.name) } } else if item.name == "B站" { Button("设置") { connectionSheet = false; biliSheet = true }; if let url = item.docsURL { Button("官方入口") { NSWorkspace.shared.open(URL(string: url)!) } }; Button("导入 CSV") { store.importCSV(for: item.name) } } else if item.name == "小红书" { Button("设置") { connectionSheet = false; xhsSheet = true }; if let url = item.docsURL { Button("官方入口") { NSWorkspace.shared.open(URL(string: url)!) } }; Button("导入 CSV") { store.importCSV(for: item.name) } } else if item.name == "抖音" { Button("设置") { connectionSheet = false; douyinSheet = true }; if let url = item.docsURL { Button("官方入口") { NSWorkspace.shared.open(URL(string: url)!) } }; Button("导入 CSV") { store.importCSV(for: item.name) } } else { if let url = item.docsURL { Button("官方入口") { NSWorkspace.shared.open(URL(string: url)!) } }; Button("导入 CSV") { store.importCSV(for: item.name) } } }.padding(10).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10)) }; HStack { Spacer(); Button("完成") { connectionSheet = false }.keyboardShortcut(.defaultAction) } }.padding(24).frame(width: 740) }
+    private func creatorKey(for name: String) -> String? {
+        switch name {
+        case "抖音": return "douyin"
+        case "B站": return "bilibili"
+        case "视频号": return "channels"
+        case "小红书": return "xhs"
+        default: return nil
+        }
+    }
+
+    private func statusText(for name: String, fallback: String) -> String {
+        switch name {
+        case "微信公众号": return store.wechatStatus
+        case "X / Twitter": return store.xStatus
+        case "B站": return store.biliStatus
+        case "小红书": return store.xhsStatus
+        case "抖音": return store.douyinStatus
+        case "视频号": return store.channelsStatus
+        default: return fallback
+        }
+    }
+
+    var connectionForm: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("平台连接中心").font(.title2.bold())
+            Text("抖音、B站、视频号、小红书支持「扫码直连创作者中心」一键同步真实数据，无需企业开放平台审核；也支持官方 API 与 CSV 自动同步。").font(.system(size: 12)).foregroundStyle(.secondary)
+            ForEach(store.connections) { item in
+                let st = statusText(for: item.name, fallback: item.state)
+                let cKey = creatorKey(for: item.name)
+                HStack(spacing: 10) {
+                    Image(systemName: item.symbol).foregroundStyle(item.color).frame(width: 24)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(item.name).font(.system(size: 12, weight: .semibold))
+                        Text(item.detail).font(.system(size: 10)).foregroundStyle(.secondary)
+                        if store.importedCounts[item.name] != nil {
+                            Text(store.importedCSVPaths[item.name] != nil ? "CSV 自动同步" : "已导入记录").font(.system(size: 10, weight: .medium)).foregroundStyle(.green)
+                        }
+                    }
+                    Spacer()
+                    Text(st)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(st.hasPrefix("已连接") ? .green : (st.contains("扫码") ? .orange : .secondary))
+                        .lineLimit(1)
+                    if let cKey {
+                        Button("扫码登录") { store.loginCreator(key: cKey) }
+                            .controlSize(.small)
+                            .disabled(store.syncingCreatorKey == cKey)
+                        Button(store.syncingCreatorKey == cKey ? "同步中" : "同步") { store.syncCreator(key: cKey) }
+                            .controlSize(.small)
+                            .buttonStyle(.borderedProminent)
+                            .tint(accent)
+                            .disabled(store.syncingCreatorKey == cKey)
+                    }
+                    if item.name == "微信公众号" {
+                        Button("设置") { connectionSheet = false; wechatSheet = true }.controlSize(.small)
+                    } else if item.name == "X / Twitter" {
+                        Button("设置") { connectionSheet = false; xSheet = true }.controlSize(.small)
+                    } else if item.name == "B站" {
+                        Button("OpenAPI") { connectionSheet = false; biliSheet = true }.controlSize(.small)
+                    } else if item.name == "小红书" {
+                        Button("OpenAPI") { connectionSheet = false; xhsSheet = true }.controlSize(.small)
+                    } else if item.name == "抖音" {
+                        Button("OpenAPI") { connectionSheet = false; douyinSheet = true }.controlSize(.small)
+                    }
+                    if item.name != "微信公众号" {
+                        Button("CSV") { store.importCSV(for: item.name) }.controlSize(.small)
+                    }
+                }
+                .padding(10)
+                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+            }
+            HStack { Spacer(); Button("完成") { connectionSheet = false }.keyboardShortcut(.defaultAction) }
+        }.padding(24).frame(width: 820)
+    }
     var wechatForm: some View { VStack(alignment: .leading, spacing: 16) { Text("连接微信公众号").font(.title2.bold()); Text("读取昨日粉丝和图文数据。AppID、AppSecret 只保存在本机钥匙串，不会写入 GitHub 或上传到第三方。公众号后台还需要配置服务器出口 IP 白名单。").font(.system(size: 12)).foregroundStyle(.secondary); TextField("公众号 AppID", text: $appID).textFieldStyle(.roundedBorder); SecureField("公众号 AppSecret", text: $appSecret).textFieldStyle(.roundedBorder); Text(store.wechatStatus).font(.system(size: 11)).foregroundStyle(store.wechatStatus.hasPrefix("已连接") ? .green : .secondary); HStack { Spacer(); Button("取消") { wechatSheet = false }; Button("连接并读取") { store.connectWeChat(appID: appID, secret: appSecret); wechatSheet = false }.keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent) } }.padding(24).frame(width: 500) }
     var xForm: some View { VStack(alignment: .leading, spacing: 16) { Text("连接 X / Twitter").font(.title2.bold()); Text("使用 X Developer 的用户 Bearer Token 读取公开账号信息。Token 只保存在本机钥匙串，不会写入 GitHub。没有 Token 时可先点击平台连接中心的“官方入口”。").font(.system(size: 12)).foregroundStyle(.secondary); TextField("X 用户名（不含 @）", text: $xUsername).textFieldStyle(.roundedBorder); SecureField("User Bearer Token", text: $xToken).textFieldStyle(.roundedBorder); Text(store.xStatus).font(.system(size: 11)).foregroundStyle(store.xStatus.hasPrefix("已连接") ? .green : .secondary); HStack { Spacer(); Button("取消") { xSheet = false }; Button("连接并读取") { store.connectX(username: xUsername, token: xToken); xSheet = false }.keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent) } }.padding(24).frame(width: 540) }
     var biliForm: some View { VStack(alignment: .leading, spacing: 16) { Text("连接 B 站开放平台").font(.title2.bold()); Text("使用 B 站开放平台应用的 Access Key、App Secret 和 OAuth Access Token，按官方 HMAC-SHA256 签名验证账号。凭证只保存在本机钥匙串。").font(.system(size: 12)).foregroundStyle(.secondary); TextField("Access Key / client_id", text: $biliAccessKey).textFieldStyle(.roundedBorder); SecureField("App Secret", text: $biliSecret).textFieldStyle(.roundedBorder); SecureField("OAuth Access Token", text: $biliToken).textFieldStyle(.roundedBorder); Text(store.biliStatus).font(.system(size: 11)).foregroundStyle(store.biliStatus.hasPrefix("已连接") ? .green : .secondary); HStack { Spacer(); Button("取消") { biliSheet = false }; Button("验证并连接") { store.connectBili(accessKey: biliAccessKey, secret: biliSecret, token: biliToken); biliSheet = false }.keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent) } }.padding(24).frame(width: 580) }
     var xhsForm: some View { VStack(alignment: .leading, spacing: 16) { Text("连接小红书开放平台").font(.title2.bold()); Text("当前官方仅开放 basic_info。输入应用 App ID 和 OAuth Access Token 后，应用会验证小红书授权账号的基础身份；粉丝数、笔记数等统计权限尚未开放。").font(.system(size: 12)).foregroundStyle(.secondary); TextField("小红书 App ID", text: $xhsAppID).textFieldStyle(.roundedBorder); SecureField("OAuth Access Token", text: $xhsToken).textFieldStyle(.roundedBorder); Text(store.xhsStatus).font(.system(size: 11)).foregroundStyle(store.xhsStatus.hasPrefix("已连接") ? .green : .secondary); HStack { Spacer(); Button("取消") { xhsSheet = false }; Button("验证并连接") { store.connectXHS(appID: xhsAppID, token: xhsToken); xhsSheet = false }.keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent) } }.padding(24).frame(width: 600) }
     var douyinForm: some View { VStack(alignment: .leading, spacing: 16) { Text("连接抖音开放平台").font(.title2.bold()); Text("使用抖音 OAuth 授权后得到的 open_id 和 access_token，读取近 30 天官方作品数量与新增播放。Token 只保存在本机钥匙串。首次授权后的统计数据可能需要等待官方生成。").font(.system(size: 12)).foregroundStyle(.secondary); TextField("抖音 open_id", text: $douyinOpenID).textFieldStyle(.roundedBorder); SecureField("OAuth Access Token", text: $douyinToken).textFieldStyle(.roundedBorder); Text(store.douyinStatus).font(.system(size: 11)).foregroundStyle(store.douyinStatus.hasPrefix("已连接") ? .green : .secondary); HStack { Spacer(); Button("取消") { douyinSheet = false }; Button("验证并读取") { store.connectDouyin(openID: douyinOpenID, token: douyinToken); douyinSheet = false }.keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent) } }.padding(24).frame(width: 600) }
-    var overview: some View { VStack(spacing: 14) { HStack(spacing: 12) { MetricCard(title: "全平台粉丝", value: "68,972", delta: "↑ 本月 +2,365 · 演示汇总", symbol: "person.3.fill"); MetricCard(title: "本月发布", value: "110 条", delta: "↑ 比上月多 18 条 · 演示汇总", symbol: "paperplane.fill"); MetricCard(title: "总播放 / 阅读", value: "286.4 万", delta: "↑ 本月 +31.8% · 演示汇总", symbol: "play.circle.fill"); MetricCard(title: "内容转化", value: "9.8%", delta: "↑ 知识星球表现最好 · 演示汇总", symbol: "arrow.up.right") }; HStack(alignment: .top, spacing: 14) { TrendChart().frame(maxWidth: .infinity); VStack(alignment: .leading, spacing: 12) { Text("今天值得关注").font(.system(size: 14, weight: .semibold)); insight("小红书近 7 天涨粉最多", "+666 粉丝，占整体增长 28% · 演示", .red); insight("知识星球转化最高", "注册转化率 18.2% · 演示", .purple); if let summary = store.wechatSummary { insight("公众号昨日数据已接入", "净增 \(summary.newFollowers)，阅读 \(summary.articleReads)", .green) } else { insight("公众号内容可以复用", "连接后这里会显示真实昨日数据", .green) } }.padding(16).frame(width: 270, alignment: .leading).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14)) }; HStack(alignment: .top, spacing: 14) { VStack(alignment: .leading, spacing: 8) { Text("平台表现").font(.system(size: 14, weight: .semibold)); LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 10) { ForEach(store.displayPlatforms) { PlatformCard(item: $0) } } }.frame(maxWidth: .infinity); VStack(alignment: .leading, spacing: 8) { Text("最近内容").font(.system(size: 14, weight: .semibold)); ForEach(store.contents.prefix(4)) { ContentRow(item: $0) } }.padding(16).frame(width: 390, alignment: .leading).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14)) } }.padding(.top, 1) }
+    var overview: some View {
+        let m = store.overviewMetrics
+        return VStack(spacing: 14) {
+            HStack(spacing: 12) {
+                MetricCard(title: "全平台粉丝", value: m.followers, delta: m.followersDelta, symbol: "person.3.fill")
+                MetricCard(title: "近期发布", value: m.posts, delta: m.postsDelta, symbol: "paperplane.fill")
+                MetricCard(title: "总播放 / 阅读", value: m.views, delta: m.viewsDelta, symbol: "play.circle.fill")
+                MetricCard(title: "内容互动率", value: m.engagement, delta: m.engagementDelta, symbol: "arrow.up.right")
+            }
+            HStack(alignment: .top, spacing: 14) {
+                TrendChart().frame(maxWidth: .infinity)
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("今天值得关注").font(.system(size: 14, weight: .semibold))
+                    if let dy = store.creatorSnapshots["抖音"], dy.ok {
+                        insight("抖音创作者中心已直连", "粉丝 \(dy.followers ?? 0) · 播放 \(dy.views ?? 0)", .black)
+                    } else {
+                        insight("小红书近 7 天涨粉最多", "+666 粉丝，占整体增长 28% · 演示", .red)
+                    }
+                    if let bili = store.creatorSnapshots["B站"], bili.ok {
+                        insight("B站创作中心已直连", "粉丝 \(bili.followers ?? 0) · 稿件 \(bili.posts ?? 0) 条", .blue)
+                    } else if let ch = store.creatorSnapshots["视频号"], ch.ok {
+                        insight("视频号助手已直连", "粉丝 \(ch.followers ?? 0) · 播放 \(ch.views ?? 0)", .orange)
+                    } else {
+                        insight("B站 / 视频号支持扫码直连", "点击右上角「连接平台」即可扫码同步", .blue)
+                    }
+                    if let summary = store.wechatSummary {
+                        insight("公众号昨日数据已接入", "净增 \(summary.newFollowers)，阅读 \(summary.articleReads)", .green)
+                    } else {
+                        insight("公众号内容可以复用", "连接后这里会显示真实昨日数据", .green)
+                    }
+                }.padding(16).frame(width: 270, alignment: .leading).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
+            }
+            HStack(alignment: .top, spacing: 14) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("平台表现").font(.system(size: 14, weight: .semibold))
+                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                        ForEach(store.displayPlatforms) { PlatformCard(item: $0) }
+                    }
+                }.frame(maxWidth: .infinity)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("最近内容").font(.system(size: 14, weight: .semibold))
+                    ForEach(store.displayContents.prefix(4)) { ContentRow(item: $0) }
+                }.padding(16).frame(width: 390, alignment: .leading).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
+            }
+        }.padding(.top, 1)
+    }
     func insight(_ title: String, _ detail: String, _ color: Color) -> some View { HStack(alignment: .top, spacing: 8) { Circle().fill(color).frame(width: 7, height: 7).padding(.top, 4); VStack(alignment: .leading, spacing: 3) { Text(title).font(.system(size: 11, weight: .semibold)); Text(detail).font(.system(size: 10)).foregroundStyle(.secondary) } } }
-    var contentView: some View { VStack(alignment: .leading, spacing: 12) { HStack { VStack(alignment: .leading, spacing: 4) { Text("内容库").font(.system(size: 17, weight: .bold)); Text("先接入公众号官方草稿箱，其他平台可绑定一次 CSV 文件，文件更新后会自动同步。").font(.system(size: 11)).foregroundStyle(.secondary) }; Spacer(); Button { store.loadWeChatDrafts() } label: { Label("刷新公众号草稿", systemImage: "arrow.clockwise") }.controlSize(.small) }; HStack { Text(store.wechatDraftStatus).font(.system(size: 11, weight: .medium)).foregroundStyle(store.wechatDraftStatus.contains("官方") ? .green : .secondary); Spacer() }.padding(.bottom, 2); if !store.wechatDrafts.isEmpty { VStack(alignment: .leading, spacing: 8) { Text("公众号草稿箱").font(.system(size: 13, weight: .semibold)); ForEach(store.wechatDrafts) { draft in HStack { Image(systemName: "doc.text").foregroundStyle(.green); VStack(alignment: .leading, spacing: 3) { Text(draft.title).font(.system(size: 12, weight: .medium)); Text("\(draft.articleCount) 篇图文 · \(draft.updateTime.map { Self.dateFormatter.string(from: $0) } ?? "时间未知")").font(.system(size: 10)).foregroundStyle(.secondary) }; Spacer(); Text("草稿").font(.system(size: 10, weight: .medium)).foregroundStyle(.orange) }.padding(10).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10)) } }.padding(.bottom, 6) }; ForEach(store.contents) { ContentRow(item: $0).padding(.horizontal, 12).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12)) } }.padding(.top, 10) }
+    var contentView: some View { VStack(alignment: .leading, spacing: 12) { HStack { VStack(alignment: .leading, spacing: 4) { Text("内容库").font(.system(size: 17, weight: .bold)); Text("自动聚合创作者中心近期作品与公众号官方草稿箱。").font(.system(size: 11)).foregroundStyle(.secondary) }; Spacer(); Button { store.loadWeChatDrafts() } label: { Label("刷新公众号草稿", systemImage: "arrow.clockwise") }.controlSize(.small) }; HStack { Text(store.wechatDraftStatus).font(.system(size: 11, weight: .medium)).foregroundStyle(store.wechatDraftStatus.contains("官方") ? .green : .secondary); Spacer() }.padding(.bottom, 2); if !store.wechatDrafts.isEmpty { VStack(alignment: .leading, spacing: 8) { Text("公众号草稿箱").font(.system(size: 13, weight: .semibold)); ForEach(store.wechatDrafts) { draft in HStack { Image(systemName: "doc.text").foregroundStyle(.green); VStack(alignment: .leading, spacing: 3) { Text(draft.title).font(.system(size: 12, weight: .medium)); Text("\(draft.articleCount) 篇图文 · \(draft.updateTime.map { Self.dateFormatter.string(from: $0) } ?? "时间未知")").font(.system(size: 10)).foregroundStyle(.secondary) }; Spacer(); Text("草稿").font(.system(size: 10, weight: .medium)).foregroundStyle(.orange) }.padding(10).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10)) } }.padding(.bottom, 6) }; ForEach(store.displayContents) { ContentRow(item: $0).padding(.horizontal, 12).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12)) } }.padding(.top, 10) }
     var platformView: some View { VStack(alignment: .leading, spacing: 10) { Text("平台总览").font(.system(size: 17, weight: .bold)); Text(store.dataSource).font(.system(size: 11)).foregroundStyle(.secondary); LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 12) { ForEach(store.displayPlatforms) { PlatformCard(item: $0) } } }.padding(.top, 10) }
     var reviewView: some View { VStack(alignment: .leading, spacing: 14) { Text("内容复盘").font(.system(size: 17, weight: .bold)); Text("系统会根据真实数据自动生成：哪些主题值得继续、哪些内容适合改编、哪个平台正在增长。").font(.system(size: 12)).foregroundStyle(.secondary); TrendChart(); Text("下一步建议").font(.system(size: 14, weight: .semibold)); insight("把“技能管家”案例拆成 3 个短内容", "已有内容表现好，适合跨平台二次分发", accent); insight("给小红书增加案例型标题", "近 7 天互动率明显高于其他平台", .red); insight("建立咨询转化记录", "目前只能看到播放和互动，成交数据还没有接入", .orange) }.padding(.top, 10) }
 }
@@ -1010,7 +1375,7 @@ struct Dashboard: View {
         startWeChatRelayTunnel()
         popover = NSPopover(); popover.contentViewController = NSHostingController(rootView: Dashboard(store: store)); popover.contentSize = NSSize(width: 900, height: 650); popover.behavior = .transient
         status = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        if let button = status.button { button.image = NSImage(systemSymbolName: "chart.bar.fill", accessibilityDescription: "汇芯 内容创业管家"); button.image?.isTemplate = true; button.toolTip = "汇芯 内容创业管家"; button.target = self; button.action = #selector(toggle) }
+        if let button = status.button { button.image = NSImage(systemSymbolName: "chart.bar.fill", accessibilityDescription: "汇芯内容管家"); button.image?.isTemplate = true; button.toolTip = "汇芯内容管家"; button.target = self; button.action = #selector(toggle) }
         if CommandLine.arguments.contains("--show") { showWindow() }
     }
     func applicationWillTerminate(_ notification: Notification) {
@@ -1027,7 +1392,7 @@ struct Dashboard: View {
         relayProcess = process
     }
     @objc func toggle() { if popover.isShown { popover.performClose(nil) } else { guard let button = status.button else { return }; NSApp.activate(ignoringOtherApps: true); popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY) } }
-    func showWindow() { let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 650), styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false); w.title = "汇芯 内容创业管家"; w.contentView = NSHostingView(rootView: Dashboard(store: store)); w.center(); w.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); window = w }
+    func showWindow() { let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 650), styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false); w.title = "汇芯内容管家"; w.contentView = NSHostingView(rootView: Dashboard(store: store)); w.center(); w.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); window = w }
 }
 
 let app = NSApplication.shared
