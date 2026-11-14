@@ -3,7 +3,6 @@
 
 支持平台：
 - douyin   (抖音创作者中心，优先复用 ~/lab/douyin-publisher/profile)
-- bilibili (B站创作中心，~/.huixin-content-manager/profiles/bilibili)
 - channels (微信视频号助手，优先探测本机 9333/9335/9334 CDP，否则使用独立 profile)
 - xhs      (小红书创作者平台，~/.huixin-content-manager/profiles/xhs)
 
@@ -41,12 +40,6 @@ PLATFORM_URLS = {
         "home": "https://creator.douyin.com/creator-micro/home",
         "op": "https://creator.douyin.com/creator-micro/data-center/operation",
         "manage": "https://creator.douyin.com/creator-micro/content/manage",
-    },
-    "bilibili": {
-        "login": "https://passport.bilibili.com/login?gourl=https%3A%2F%2Fmember.bilibili.com%2Fplatform%2Fhome",
-        "home": "https://member.bilibili.com/platform/home",
-        "stat_api": "https://member.bilibili.com/x/web/index/stat",
-        "list_api": "https://member.bilibili.com/x/vu/web/list?status=pubed&pn=1&ps=10",
     },
     "channels": {
         "login": "https://channels.weixin.qq.com/platform",
@@ -513,7 +506,6 @@ async def sync_xhs(playwright) -> Dict[str, Any]:
 
 SYNC_HANDLERS = {
     "douyin": sync_douyin,
-    "bilibili": sync_bilibili,
     "channels": sync_channels,
     "xhs": sync_xhs,
 }
@@ -536,9 +528,6 @@ async def run_login(platform: str, timeout_sec: int = 180) -> Dict[str, Any]:
                 break
             cur = page.url or ""
             if platform == "douyin" and "creator-micro/home" in cur:
-                logged_in = True
-                break
-            if platform == "bilibili" and "member.bilibili.com" in cur and "passport" not in cur:
                 logged_in = True
                 break
             if platform == "channels" and "channels.weixin.qq.com/platform" in cur and "login" not in cur:
@@ -581,7 +570,6 @@ def cmd_status() -> Dict[str, Any]:
         logged = any("channels.weixin.qq.com" in (t.get("url") or "") and "login" not in (t.get("url") or "") for t in tabs)
         out["cdp"][name] = {"port": port, "alive": alive, "logged_in": logged}
     out["douyin_profile_exists"] = profile_dir_for("douyin").exists()
-    out["bilibili_profile_exists"] = profile_dir_for("bilibili").exists()
     out["xhs_profile_exists"] = profile_dir_for("xhs").exists()
     return out
 
@@ -591,9 +579,9 @@ def main() -> None:
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("status")
     p_sync = sub.add_parser("sync")
-    p_sync.add_argument("--platform", default="all", choices=["all", "douyin", "bilibili", "channels", "xhs"])
+    p_sync.add_argument("--platform", default="all", choices=["all", "douyin", "channels", "xhs"])
     p_login = sub.add_parser("login")
-    p_login.add_argument("--platform", required=True, choices=["douyin", "bilibili", "channels", "xhs"])
+    p_login.add_argument("--platform", required=True, choices=["douyin", "channels", "xhs"])
     p_login.add_argument("--timeout", type=int, default=180)
     args = parser.parse_args()
 

@@ -592,8 +592,6 @@ struct ImportedPlatformSnapshot: Codable {
     @Published var wechatDraftStatus = "尚未读取草稿箱"
     @Published var xSummary: XSummary?
     @Published var xStatus = "尚未连接"
-    @Published var biliSummary: BiliSummary?
-    @Published var biliStatus = "尚未连接"
     @Published var xhsSummary: XHSSummary?
     @Published var xhsStatus = "尚未连接"
     @Published var douyinSummary: DouyinSummary?
@@ -609,7 +607,6 @@ struct ImportedPlatformSnapshot: Codable {
     private let vault = ProfileVault()
     private let wechat = WeChatConnector()
     private let x = XConnector()
-    private let bili = BiliConnector()
     private let xhs = XHSConnector()
     private let douyin = DouyinConnector()
     private let bridge = CreatorBridge()
@@ -635,7 +632,6 @@ struct ImportedPlatformSnapshot: Codable {
         }
         if wechat.savedCredentials() != nil { wechatStatus = "已保存凭证 · 点击更新" }
         if x.savedCredentials() != nil { xStatus = "已保存凭证 · 点击更新" }
-        if bili.savedCredentials() != nil { biliStatus = "已保存凭证 · 点击更新" }
         if xhs.savedCredentials() != nil { xhsStatus = "已保存凭证 · 点击更新" }
         if douyin.savedCredentials() != nil { douyinStatus = "已保存凭证 · 点击更新" }
         let cached = bridge.loadCached()
@@ -657,7 +653,6 @@ struct ImportedPlatformSnapshot: Codable {
     let connections: [PlatformConnection] = [
         .init(name: "微信公众号", symbol: "bubble.left.and.bubble.right.fill", state: "已具备接口", detail: "支持 AppID/AppSecret + 腾讯云中继读取昨日数据与草稿箱", color: .green, docsURL: "https://developers.weixin.qq.com/doc/offiaccount/Basic_Information/Get_access_token.html"),
         .init(name: "抖音", symbol: "music.note", state: "创作者中心直连", detail: "支持扫码直连抖音创作者中心，无需企业开放平台审核；也支持 Open API", color: .black, docsURL: "https://creator.douyin.com/"),
-        .init(name: "B站", symbol: "tv.fill", state: "创作者中心直连", detail: "支持扫码直连 B 站创作中心，自动读取粉丝、播放与近期稿件", color: .blue, docsURL: "https://member.bilibili.com/platform/home"),
         .init(name: "视频号", symbol: "play.rectangle.fill", state: "创作者中心直连", detail: "自动探测本机视频号助手守护进程或扫码登录，支持 CSV 补充", color: .orange, docsURL: "https://channels.weixin.qq.com/platform"),
         .init(name: "小红书", symbol: "note.text", state: "创作者中心直连", detail: "支持扫码直连小红书创作者平台，或使用 CSV 自动同步", color: .red, docsURL: "https://creator.xiaohongshu.com/"),
         .init(name: "X / Twitter", symbol: "at", state: "官方 API", detail: "使用 X Developer User Bearer Token 读取公开指标", color: .primary, docsURL: "https://developer.x.com/")
@@ -667,7 +662,6 @@ struct ImportedPlatformSnapshot: Codable {
         .init(name: "小红书", symbol: "note.text", color: .red, followers: "19,122", delta: "+666", posts: "24", engagement: "15.9%", source: "演示数据"),
         .init(name: "视频号", symbol: "play.rectangle.fill", color: .orange, followers: "4,584", delta: "+189", posts: "12", engagement: "6.8%", source: "演示数据"),
         .init(name: "抖音", symbol: "music.note", color: .black, followers: "13,060", delta: "+344", posts: "16", engagement: "9.2%", source: "演示数据"),
-        .init(name: "B站", symbol: "tv.fill", color: .blue, followers: "15,972", delta: "+344", posts: "9", engagement: "11.4%", source: "演示数据"),
         .init(name: "X", symbol: "at", color: .primary, followers: "—", delta: "—", posts: "—", engagement: "—", source: "演示数据"),
         .init(name: "知识星球", symbol: "person.3.fill", color: .purple, followers: "3,554", delta: "+1,022", posts: "31", engagement: "18.2%", source: "演示数据")
     ]
@@ -708,7 +702,7 @@ struct ImportedPlatformSnapshot: Codable {
     }
 
     var displayContents: [ContentItem] {
-        let colorMap: [String: Color] = ["公众号": .green, "小红书": .red, "视频号": .orange, "抖音": .black, "B站": .blue]
+        let colorMap: [String: Color] = ["公众号": .green, "小红书": .red, "视频号": .orange, "抖音": .black]
         var realItems: [ContentItem] = []
         for snap in creatorSnapshots.values where snap.ok {
             for w in snap.items ?? [] {
@@ -775,8 +769,7 @@ struct ImportedPlatformSnapshot: Codable {
     let contents: [ContentItem] = [
         .init(title: "AI 也会做梦了？Claude 记忆拆解", platform: "公众号", status: "已发布", views: "6,768", likes: "382", conversion: "9.8%", color: .green),
         .init(title: "我用一个小流程，把 536 个技能管明白了", platform: "小红书", status: "已发布", views: "12,480", likes: "1,106", conversion: "12.4%", color: .red),
-        .init(title: "内容创业者最容易忽略的 3 个数据", platform: "视频号", status: "已排期", views: "—", likes: "—", conversion: "待观察", color: .orange),
-        .init(title: "Token 不够用？先看这张额度地图", platform: "B站", status: "已发布", views: "3,226", likes: "511", conversion: "6.2%", color: .blue)
+        .init(title: "内容创业者最容易忽略的 3 个数据", platform: "视频号", status: "已排期", views: "—", likes: "—", conversion: "待观察", color: .orange)
     ]
 
     func refresh() {
@@ -796,13 +789,11 @@ struct ImportedPlatformSnapshot: Codable {
             creatorSnapshots[name] = snap
             let msg = snap.message ?? "已连接 · \(snap.source ?? name)"
             if name == "抖音" { douyinStatus = msg }
-            else if name == "B站" { biliStatus = msg }
             else if name == "视频号" { channelsStatus = msg }
             else if name == "小红书" { xhsStatus = msg }
             dataSource = "已接入创作者中心真实数据 · 未连接平台保留演示或 CSV"
         } else if let msg = snap.message, !msg.isEmpty {
             if name == "抖音" { douyinStatus = msg }
-            else if name == "B站" { biliStatus = msg }
             else if name == "视频号" { channelsStatus = msg }
             else if name == "小红书" { xhsStatus = msg }
         }
@@ -810,9 +801,8 @@ struct ImportedPlatformSnapshot: Codable {
 
     func syncCreator(key: String) {
         syncingCreatorKey = key
-        let displayName = key == "douyin" ? "抖音" : key == "bilibili" ? "B站" : key == "channels" ? "视频号" : "小红书"
+        let displayName = key == "douyin" ? "抖音" : key == "channels" ? "视频号" : "小红书"
         if key == "douyin" { douyinStatus = "正在同步抖音创作者中心…" }
-        else if key == "bilibili" { biliStatus = "正在同步 B 站创作中心…" }
         else if key == "channels" { channelsStatus = "正在探测视频号助手…" }
         else if key == "xhs" { xhsStatus = "正在同步小红书创作者平台…" }
         Task {
@@ -821,7 +811,6 @@ struct ImportedPlatformSnapshot: Codable {
             } else {
                 let err = "\(displayName)同步脚本调用失败"
                 if key == "douyin" { douyinStatus = err }
-                else if key == "bilibili" { biliStatus = err }
                 else if key == "channels" { channelsStatus = err }
                 else if key == "xhs" { xhsStatus = err }
             }
@@ -832,7 +821,6 @@ struct ImportedPlatformSnapshot: Codable {
     func loginCreator(key: String) {
         syncingCreatorKey = key
         if key == "douyin" { douyinStatus = "请在弹出的窗口中扫码登录抖音…" }
-        else if key == "bilibili" { biliStatus = "请在弹出的窗口中扫码登录 B 站…" }
         else if key == "channels" { channelsStatus = "请在弹出的窗口中微信扫码登录视频号…" }
         else if key == "xhs" { xhsStatus = "请在弹出的窗口中扫码登录小红书…" }
         Task {
@@ -862,14 +850,6 @@ struct ImportedPlatformSnapshot: Codable {
                 xStatus = "已连接 · 粉丝 \(format(xSummary?.followers ?? 0))"
             } catch {
                 xStatus = error.localizedDescription
-            }
-        }
-        if let credentials = bili.savedCredentials() {
-            do {
-                biliSummary = try await bili.fetchProfile(accessKey: credentials.0, secret: credentials.1, token: credentials.2)
-                biliStatus = "已连接 · \(biliSummary?.name ?? "已授权账号")"
-            } catch {
-                biliStatus = error.localizedDescription
             }
         }
         if let credentials = xhs.savedCredentials() {
@@ -917,21 +897,6 @@ struct ImportedPlatformSnapshot: Codable {
                 dataSource = "X 官方数据已连接 · 其他平台仍为演示或手动导入"
             } catch {
                 xStatus = error.localizedDescription
-            }
-        }
-    }
-
-    func connectBili(accessKey: String, secret: String, token: String) {
-        biliStatus = "正在验证 B 站官方授权…"
-        Task {
-            do {
-                let profile = try await bili.fetchProfile(accessKey: accessKey.trimmingCharacters(in: .whitespacesAndNewlines), secret: secret.trimmingCharacters(in: .whitespacesAndNewlines), token: token.trimmingCharacters(in: .whitespacesAndNewlines))
-                bili.saveCredentials(accessKey: accessKey, secret: secret, token: token)
-                biliSummary = profile
-                biliStatus = "已连接 · \(profile.name)"
-                dataSource = "B 站官方账号已连接 · 其他平台仍为演示或手动导入"
-            } catch {
-                biliStatus = error.localizedDescription
             }
         }
     }
@@ -1191,7 +1156,6 @@ struct Dashboard: View {
     @State private var about = false
     @State private var wechatSheet = false
     @State private var xSheet = false
-    @State private var biliSheet = false
     @State private var xhsSheet = false
     @State private var douyinSheet = false
     @State private var connectionSheet = false
@@ -1204,9 +1168,6 @@ struct Dashboard: View {
     @State private var appSecret = ""
     @State private var xUsername = ""
     @State private var xToken = ""
-    @State private var biliAccessKey = ""
-    @State private var biliSecret = ""
-    @State private var biliToken = ""
     @State private var xhsAppID = ""
     @State private var xhsToken = ""
     @State private var douyinOpenID = ""
@@ -1230,13 +1191,12 @@ struct Dashboard: View {
                 else { reviewView }
             }
             HStack { Text(store.dataSource).font(.system(size: 10)).foregroundStyle(.secondary); Spacer(); Text("更新于 \(store.lastUpdated.formatted(date: .omitted, time: .shortened))").font(.system(size: 10)).foregroundStyle(.tertiary) }
-        }.padding(20).frame(width: 900, height: 650).background(Color(nsColor: .windowBackgroundColor)).sheet(isPresented: $about) { Text("汇芯内容创业管家\n官方优先接入公众号草稿箱和可用数据；其他平台支持授权或 CSV 导入。\n\n袁六伟 · 台州汇芯").font(.system(size: 13)).multilineTextAlignment(.leading).padding(28).frame(width: 430) }.sheet(isPresented: $vaultSheet) { vaultForm }.sheet(isPresented: $wechatSheet) { wechatForm }.sheet(isPresented: $xSheet) { xForm }.sheet(isPresented: $biliSheet) { biliForm }.sheet(isPresented: $xhsSheet) { xhsForm }.sheet(isPresented: $douyinSheet) { douyinForm }.sheet(isPresented: $connectionSheet) { connectionForm }
+        }.padding(20).frame(width: 900, height: 650).background(Color(nsColor: .windowBackgroundColor)).sheet(isPresented: $about) { Text("汇芯内容管家\n支持抖音、视频号、小红书创作者中心直连，以及公众号草稿箱和 CSV 导入。\n\n袁六伟 · 台州汇芯").font(.system(size: 13)).multilineTextAlignment(.leading).padding(28).frame(width: 430) }.sheet(isPresented: $vaultSheet) { vaultForm }.sheet(isPresented: $wechatSheet) { wechatForm }.sheet(isPresented: $xSheet) { xForm }.sheet(isPresented: $xhsSheet) { xhsForm }.sheet(isPresented: $douyinSheet) { douyinForm }.sheet(isPresented: $connectionSheet) { connectionForm }
     }
     var vaultForm: some View { VStack(alignment: .leading, spacing: 14) { Text("信息保险库").font(.title2.bold()); Text("常用资料只保存在本机 macOS 钥匙串，方便后续填写平台申请表。不会自动上传证件，也不会写入 GitHub。").font(.system(size: 12)).foregroundStyle(.secondary); TextField("手机号", text: $vaultPhone).textFieldStyle(.roundedBorder); TextField("联系邮箱", text: $vaultEmail).textFieldStyle(.roundedBorder); TextField("公司主体全称", text: $vaultCompany).textFieldStyle(.roundedBorder); TextField("联系人姓名", text: $vaultContact).textFieldStyle(.roundedBorder); Text("状态：\(store.vaultStatus)").font(.system(size: 11)).foregroundStyle(.secondary); HStack { Spacer(); Button("取消") { vaultSheet = false }; Button("保存到本机") { store.saveProfile(phone: vaultPhone, email: vaultEmail, company: vaultCompany, contact: vaultContact); vaultSheet = false }.keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent) } }.padding(24).frame(width: 540) }
     private func creatorKey(for name: String) -> String? {
         switch name {
         case "抖音": return "douyin"
-        case "B站": return "bilibili"
         case "视频号": return "channels"
         case "小红书": return "xhs"
         default: return nil
@@ -1247,7 +1207,6 @@ struct Dashboard: View {
         switch name {
         case "微信公众号": return store.wechatStatus
         case "X / Twitter": return store.xStatus
-        case "B站": return store.biliStatus
         case "小红书": return store.xhsStatus
         case "抖音": return store.douyinStatus
         case "视频号": return store.channelsStatus
@@ -1258,7 +1217,7 @@ struct Dashboard: View {
     var connectionForm: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("平台连接中心").font(.title2.bold())
-            Text("抖音、B站、视频号、小红书支持「扫码直连创作者中心」一键同步真实数据，无需企业开放平台审核；也支持官方 API 与 CSV 自动同步。").font(.system(size: 12)).foregroundStyle(.secondary)
+            Text("抖音、视频号、小红书支持「扫码直连创作者中心」一键同步真实数据，无需企业开放平台审核；也支持官方 API 与 CSV 自动同步。").font(.system(size: 12)).foregroundStyle(.secondary)
             ForEach(store.connections) { item in
                 let st = statusText(for: item.name, fallback: item.state)
                 let cKey = creatorKey(for: item.name)
@@ -1290,8 +1249,6 @@ struct Dashboard: View {
                         Button("设置") { connectionSheet = false; wechatSheet = true }.controlSize(.small)
                     } else if item.name == "X / Twitter" {
                         Button("设置") { connectionSheet = false; xSheet = true }.controlSize(.small)
-                    } else if item.name == "B站" {
-                        Button("OpenAPI") { connectionSheet = false; biliSheet = true }.controlSize(.small)
                     } else if item.name == "小红书" {
                         Button("OpenAPI") { connectionSheet = false; xhsSheet = true }.controlSize(.small)
                     } else if item.name == "抖音" {
@@ -1309,7 +1266,6 @@ struct Dashboard: View {
     }
     var wechatForm: some View { VStack(alignment: .leading, spacing: 16) { Text("连接微信公众号").font(.title2.bold()); Text("读取昨日粉丝和图文数据。AppID、AppSecret 只保存在本机钥匙串，不会写入 GitHub 或上传到第三方。公众号后台还需要配置服务器出口 IP 白名单。").font(.system(size: 12)).foregroundStyle(.secondary); TextField("公众号 AppID", text: $appID).textFieldStyle(.roundedBorder); SecureField("公众号 AppSecret", text: $appSecret).textFieldStyle(.roundedBorder); Text(store.wechatStatus).font(.system(size: 11)).foregroundStyle(store.wechatStatus.hasPrefix("已连接") ? .green : .secondary); HStack { Spacer(); Button("取消") { wechatSheet = false }; Button("连接并读取") { store.connectWeChat(appID: appID, secret: appSecret); wechatSheet = false }.keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent) } }.padding(24).frame(width: 500) }
     var xForm: some View { VStack(alignment: .leading, spacing: 16) { Text("连接 X / Twitter").font(.title2.bold()); Text("使用 X Developer 的用户 Bearer Token 读取公开账号信息。Token 只保存在本机钥匙串，不会写入 GitHub。没有 Token 时可先点击平台连接中心的“官方入口”。").font(.system(size: 12)).foregroundStyle(.secondary); TextField("X 用户名（不含 @）", text: $xUsername).textFieldStyle(.roundedBorder); SecureField("User Bearer Token", text: $xToken).textFieldStyle(.roundedBorder); Text(store.xStatus).font(.system(size: 11)).foregroundStyle(store.xStatus.hasPrefix("已连接") ? .green : .secondary); HStack { Spacer(); Button("取消") { xSheet = false }; Button("连接并读取") { store.connectX(username: xUsername, token: xToken); xSheet = false }.keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent) } }.padding(24).frame(width: 540) }
-    var biliForm: some View { VStack(alignment: .leading, spacing: 16) { Text("连接 B 站开放平台").font(.title2.bold()); Text("使用 B 站开放平台应用的 Access Key、App Secret 和 OAuth Access Token，按官方 HMAC-SHA256 签名验证账号。凭证只保存在本机钥匙串。").font(.system(size: 12)).foregroundStyle(.secondary); TextField("Access Key / client_id", text: $biliAccessKey).textFieldStyle(.roundedBorder); SecureField("App Secret", text: $biliSecret).textFieldStyle(.roundedBorder); SecureField("OAuth Access Token", text: $biliToken).textFieldStyle(.roundedBorder); Text(store.biliStatus).font(.system(size: 11)).foregroundStyle(store.biliStatus.hasPrefix("已连接") ? .green : .secondary); HStack { Spacer(); Button("取消") { biliSheet = false }; Button("验证并连接") { store.connectBili(accessKey: biliAccessKey, secret: biliSecret, token: biliToken); biliSheet = false }.keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent) } }.padding(24).frame(width: 580) }
     var xhsForm: some View { VStack(alignment: .leading, spacing: 16) { Text("连接小红书开放平台").font(.title2.bold()); Text("当前官方仅开放 basic_info。输入应用 App ID 和 OAuth Access Token 后，应用会验证小红书授权账号的基础身份；粉丝数、笔记数等统计权限尚未开放。").font(.system(size: 12)).foregroundStyle(.secondary); TextField("小红书 App ID", text: $xhsAppID).textFieldStyle(.roundedBorder); SecureField("OAuth Access Token", text: $xhsToken).textFieldStyle(.roundedBorder); Text(store.xhsStatus).font(.system(size: 11)).foregroundStyle(store.xhsStatus.hasPrefix("已连接") ? .green : .secondary); HStack { Spacer(); Button("取消") { xhsSheet = false }; Button("验证并连接") { store.connectXHS(appID: xhsAppID, token: xhsToken); xhsSheet = false }.keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent) } }.padding(24).frame(width: 600) }
     var douyinForm: some View { VStack(alignment: .leading, spacing: 16) { Text("连接抖音开放平台").font(.title2.bold()); Text("使用抖音 OAuth 授权后得到的 open_id 和 access_token，读取近 30 天官方作品数量与新增播放。Token 只保存在本机钥匙串。首次授权后的统计数据可能需要等待官方生成。").font(.system(size: 12)).foregroundStyle(.secondary); TextField("抖音 open_id", text: $douyinOpenID).textFieldStyle(.roundedBorder); SecureField("OAuth Access Token", text: $douyinToken).textFieldStyle(.roundedBorder); Text(store.douyinStatus).font(.system(size: 11)).foregroundStyle(store.douyinStatus.hasPrefix("已连接") ? .green : .secondary); HStack { Spacer(); Button("取消") { douyinSheet = false }; Button("验证并读取") { store.connectDouyin(openID: douyinOpenID, token: douyinToken); douyinSheet = false }.keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent) } }.padding(24).frame(width: 600) }
     var overview: some View {
@@ -1330,12 +1286,10 @@ struct Dashboard: View {
                     } else {
                         insight("小红书近 7 天涨粉最多", "+666 粉丝，占整体增长 28% · 演示", .red)
                     }
-                    if let bili = store.creatorSnapshots["B站"], bili.ok {
-                        insight("B站创作中心已直连", "粉丝 \(bili.followers ?? 0) · 稿件 \(bili.posts ?? 0) 条", .blue)
-                    } else if let ch = store.creatorSnapshots["视频号"], ch.ok {
+                    if let ch = store.creatorSnapshots["视频号"], ch.ok {
                         insight("视频号助手已直连", "粉丝 \(ch.followers ?? 0) · 播放 \(ch.views ?? 0)", .orange)
                     } else {
-                        insight("B站 / 视频号支持扫码直连", "点击右上角「连接平台」即可扫码同步", .blue)
+                        insight("视频号 / 小红书支持扫码直连", "点击右上角「连接平台」即可扫码同步", .orange)
                     }
                     if let summary = store.wechatSummary {
                         insight("公众号昨日数据已接入", "净增 \(summary.newFollowers)，阅读 \(summary.articleReads)", .green)
