@@ -597,6 +597,8 @@ struct ImportedPlatformSnapshot: Codable {
     @Published var douyinSummary: DouyinSummary?
     @Published var douyinStatus = "尚未连接"
     @Published var channelsStatus = "尚未连接"
+    @Published var channelsHuixinStatus = "尚未连接"
+    @Published var channelsShanheStatus = "尚未连接"
     @Published var wechatStatus = "尚未连接"
     @Published var creatorSnapshots: [String: CreatorPlatformSnapshot] = [:]
     @Published var syncingCreatorKey: String?
@@ -651,24 +653,29 @@ struct ImportedPlatformSnapshot: Codable {
 
     let tabs = ["总览", "内容", "平台", "复盘"]
     let connections: [PlatformConnection] = [
-        .init(name: "微信公众号", symbol: "bubble.left.and.bubble.right.fill", state: "已具备接口", detail: "支持 AppID/AppSecret + 腾讯云中继读取昨日数据与草稿箱", color: .green, docsURL: "https://developers.weixin.qq.com/doc/offiaccount/Basic_Information/Get_access_token.html"),
-        .init(name: "抖音", symbol: "music.note", state: "创作者中心直连", detail: "支持扫码直连抖音创作者中心，无需企业开放平台审核；也支持 Open API", color: .black, docsURL: "https://creator.douyin.com/"),
-        .init(name: "视频号", symbol: "play.rectangle.fill", state: "创作者中心直连", detail: "自动探测本机视频号助手守护进程或扫码登录，支持 CSV 补充", color: .orange, docsURL: "https://channels.weixin.qq.com/platform"),
+        .init(name: "微信公众号", symbol: "bubble.left.and.bubble.right.fill", state: "创作者中心直连", detail: "支持扫码直连公众平台，或配置 AppID/AppSecret 读取草稿箱", color: .green, docsURL: "https://mp.weixin.qq.com/"),
+        .init(name: "抖音", symbol: "music.note", state: "创作者中心直连", detail: "支持扫码直连抖音创作者中心，无需企业开放平台审核", color: .black, docsURL: "https://creator.douyin.com/"),
+        .init(name: "视频号 · 袁六伟", symbol: "play.rectangle.fill", state: "创作者中心直连", detail: "主号 · AI 相关内容（自动探测本机或扫码登录）", color: .orange, docsURL: "https://channels.weixin.qq.com/platform"),
+        .init(name: "视频号 · 汇芯袁总", symbol: "play.rectangle.fill", state: "创作者中心直连", detail: "二号 · 汇芯袁总（独立扫码会话）", color: .orange, docsURL: "https://channels.weixin.qq.com/platform"),
+        .init(name: "视频号 · 山河来电", symbol: "play.rectangle.fill", state: "创作者中心直连", detail: "三号 · 山河来电（独立扫码会话）", color: .orange, docsURL: "https://channels.weixin.qq.com/platform"),
         .init(name: "小红书", symbol: "note.text", state: "创作者中心直连", detail: "支持扫码直连小红书创作者平台，或使用 CSV 自动同步", color: .red, docsURL: "https://creator.xiaohongshu.com/"),
         .init(name: "X / Twitter", symbol: "at", state: "官方 API", detail: "使用 X Developer User Bearer Token 读取公开指标", color: .primary, docsURL: "https://developer.x.com/")
     ]
     let platforms: [Platform] = [
-        .init(name: "公众号", symbol: "bubble.left.and.bubble.right.fill", color: .green, followers: "12,680", delta: "+386", posts: "18", engagement: "8.6%", source: "演示数据"),
-        .init(name: "小红书", symbol: "note.text", color: .red, followers: "19,122", delta: "+666", posts: "24", engagement: "15.9%", source: "演示数据"),
-        .init(name: "视频号", symbol: "play.rectangle.fill", color: .orange, followers: "4,584", delta: "+189", posts: "12", engagement: "6.8%", source: "演示数据"),
-        .init(name: "抖音", symbol: "music.note", color: .black, followers: "13,060", delta: "+344", posts: "16", engagement: "9.2%", source: "演示数据"),
-        .init(name: "X", symbol: "at", color: .primary, followers: "—", delta: "—", posts: "—", engagement: "—", source: "演示数据"),
-        .init(name: "知识星球", symbol: "person.3.fill", color: .purple, followers: "3,554", delta: "+1,022", posts: "31", engagement: "18.2%", source: "演示数据")
+        .init(name: "公众号", symbol: "bubble.left.and.bubble.right.fill", color: .green, followers: "—", delta: "—", posts: "—", engagement: "—", source: "待连接"),
+        .init(name: "小红书", symbol: "note.text", color: .red, followers: "—", delta: "—", posts: "—", engagement: "—", source: "待连接"),
+        .init(name: "视频号 · 袁六伟", symbol: "play.rectangle.fill", color: .orange, followers: "—", delta: "—", posts: "—", engagement: "—", source: "待连接"),
+        .init(name: "视频号 · 汇芯袁总", symbol: "play.rectangle.fill", color: .orange, followers: "—", delta: "—", posts: "—", engagement: "—", source: "待连接"),
+        .init(name: "视频号 · 山河来电", symbol: "play.rectangle.fill", color: .orange, followers: "—", delta: "—", posts: "—", engagement: "—", source: "待连接"),
+        .init(name: "抖音", symbol: "music.note", color: .black, followers: "—", delta: "—", posts: "—", engagement: "—", source: "待连接"),
+        .init(name: "X", symbol: "at", color: .primary, followers: "—", delta: "—", posts: "—", engagement: "—", source: "待连接"),
+        .init(name: "知识星球", symbol: "person.3.fill", color: .purple, followers: "—", delta: "—", posts: "—", engagement: "—", source: "待连接")
     ]
 
     var displayPlatforms: [Platform] {
         platforms.map { item in
-            if let snap = creatorSnapshots[item.name], snap.ok {
+            let snap = creatorSnapshots[item.name] ?? (item.name == "视频号 · 袁六伟" ? creatorSnapshots["视频号"] : nil)
+            if let snap, snap.ok {
                 return Platform(name: item.name, symbol: item.symbol, color: item.color,
                                 followers: snap.followers.map(format) ?? "—",
                                 delta: snap.delta.map { $0 >= 0 ? "+\(format($0))" : format($0) } ?? "—",
@@ -783,36 +790,42 @@ struct ImportedPlatformSnapshot: Codable {
         }
     }
 
+    private func setStatus(forPlatform name: String, _ msg: String) {
+        switch name {
+        case "抖音": douyinStatus = msg
+        case "视频号", "视频号 · 袁六伟": channelsStatus = msg
+        case "视频号 · 汇芯袁总": channelsHuixinStatus = msg
+        case "视频号 · 山河来电": channelsShanheStatus = msg
+        case "小红书": xhsStatus = msg
+        case "公众号", "微信公众号": wechatStatus = msg
+        default: break
+        }
+    }
+
+    private func setStatus(forKey key: String, _ msg: String) {
+        let map = ["douyin": "抖音", "channels": "视频号 · 袁六伟", "channels_huixin": "视频号 · 汇芯袁总", "channels_shanhe": "视频号 · 山河来电", "xhs": "小红书", "wechat": "公众号"]
+        if let name = map[key] { setStatus(forPlatform: name, msg) }
+    }
+
     private func applyCreatorSnapshot(_ snap: CreatorPlatformSnapshot) {
-        let name = snap.platform
+        let name = snap.platform == "视频号" ? "视频号 · 袁六伟" : snap.platform
         if snap.ok {
             creatorSnapshots[name] = snap
-            let msg = snap.message ?? "已连接 · \(snap.source ?? name)"
-            if name == "抖音" { douyinStatus = msg }
-            else if name == "视频号" { channelsStatus = msg }
-            else if name == "小红书" { xhsStatus = msg }
-            dataSource = "已接入创作者中心真实数据 · 未连接平台保留演示或 CSV"
+            setStatus(forPlatform: name, snap.message ?? "已连接 · \(snap.source ?? name)")
+            dataSource = "已接入创作者中心真实数据 · 未连接平台待扫码或导入"
         } else if let msg = snap.message, !msg.isEmpty {
-            if name == "抖音" { douyinStatus = msg }
-            else if name == "视频号" { channelsStatus = msg }
-            else if name == "小红书" { xhsStatus = msg }
+            setStatus(forPlatform: name, msg)
         }
     }
 
     func syncCreator(key: String) {
         syncingCreatorKey = key
-        let displayName = key == "douyin" ? "抖音" : key == "channels" ? "视频号" : "小红书"
-        if key == "douyin" { douyinStatus = "正在同步抖音创作者中心…" }
-        else if key == "channels" { channelsStatus = "正在探测视频号助手…" }
-        else if key == "xhs" { xhsStatus = "正在同步小红书创作者平台…" }
+        setStatus(forKey: key, "正在同步…")
         Task {
             if let snap = await bridge.sync(platform: key) {
                 applyCreatorSnapshot(snap)
             } else {
-                let err = "\(displayName)同步脚本调用失败"
-                if key == "douyin" { douyinStatus = err }
-                else if key == "channels" { channelsStatus = err }
-                else if key == "xhs" { xhsStatus = err }
+                setStatus(forKey: key, "同步脚本调用失败")
             }
             syncingCreatorKey = nil
         }
@@ -820,9 +833,7 @@ struct ImportedPlatformSnapshot: Codable {
 
     func loginCreator(key: String) {
         syncingCreatorKey = key
-        if key == "douyin" { douyinStatus = "请在弹出的窗口中扫码登录抖音…" }
-        else if key == "channels" { channelsStatus = "请在弹出的窗口中微信扫码登录视频号…" }
-        else if key == "xhs" { xhsStatus = "请在弹出的窗口中扫码登录小红书…" }
+        setStatus(forKey: key, "请在弹出的窗口中扫码登录…")
         Task {
             if let snap = await bridge.login(platform: key) {
                 applyCreatorSnapshot(snap)
@@ -1196,8 +1207,11 @@ struct Dashboard: View {
     var vaultForm: some View { VStack(alignment: .leading, spacing: 14) { Text("信息保险库").font(.title2.bold()); Text("常用资料只保存在本机 macOS 钥匙串，方便后续填写平台申请表。不会自动上传证件，也不会写入 GitHub。").font(.system(size: 12)).foregroundStyle(.secondary); TextField("手机号", text: $vaultPhone).textFieldStyle(.roundedBorder); TextField("联系邮箱", text: $vaultEmail).textFieldStyle(.roundedBorder); TextField("公司主体全称", text: $vaultCompany).textFieldStyle(.roundedBorder); TextField("联系人姓名", text: $vaultContact).textFieldStyle(.roundedBorder); Text("状态：\(store.vaultStatus)").font(.system(size: 11)).foregroundStyle(.secondary); HStack { Spacer(); Button("取消") { vaultSheet = false }; Button("保存到本机") { store.saveProfile(phone: vaultPhone, email: vaultEmail, company: vaultCompany, contact: vaultContact); vaultSheet = false }.keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent) } }.padding(24).frame(width: 540) }
     private func creatorKey(for name: String) -> String? {
         switch name {
+        case "微信公众号": return "wechat"
         case "抖音": return "douyin"
-        case "视频号": return "channels"
+        case "视频号 · 袁六伟": return "channels"
+        case "视频号 · 汇芯袁总": return "channels_huixin"
+        case "视频号 · 山河来电": return "channels_shanhe"
         case "小红书": return "xhs"
         default: return nil
         }
@@ -1209,7 +1223,9 @@ struct Dashboard: View {
         case "X / Twitter": return store.xStatus
         case "小红书": return store.xhsStatus
         case "抖音": return store.douyinStatus
-        case "视频号": return store.channelsStatus
+        case "视频号 · 袁六伟": return store.channelsStatus
+        case "视频号 · 汇芯袁总": return store.channelsHuixinStatus
+        case "视频号 · 山河来电": return store.channelsShanheStatus
         default: return fallback
         }
     }
@@ -1217,7 +1233,7 @@ struct Dashboard: View {
     var connectionForm: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("平台连接中心").font(.title2.bold())
-            Text("抖音、视频号、小红书支持「扫码直连创作者中心」一键同步真实数据，无需企业开放平台审核；也支持官方 API 与 CSV 自动同步。").font(.system(size: 12)).foregroundStyle(.secondary)
+            Text("支持公众号、抖音、小红书及 3 个视频号（袁六伟 / 汇芯袁总 / 山河来电）扫码直连，无需企业开放平台审核。").font(.system(size: 12)).foregroundStyle(.secondary)
             ForEach(store.connections) { item in
                 let st = statusText(for: item.name, fallback: item.state)
                 let cKey = creatorKey(for: item.name)
@@ -1286,10 +1302,10 @@ struct Dashboard: View {
                     } else {
                         insight("小红书近 7 天涨粉最多", "+666 粉丝，占整体增长 28% · 演示", .red)
                     }
-                    if let ch = store.creatorSnapshots["视频号"], ch.ok {
-                        insight("视频号助手已直连", "粉丝 \(ch.followers ?? 0) · 播放 \(ch.views ?? 0)", .orange)
+                    if let ch = store.creatorSnapshots["视频号 · 袁六伟"], ch.ok {
+                        insight("视频号 · 袁六伟已直连", "关注者 \(ch.followers ?? 0) · 视频 \(ch.posts ?? 0) 条", .orange)
                     } else {
-                        insight("视频号 / 小红书支持扫码直连", "点击右上角「连接平台」即可扫码同步", .orange)
+                        insight("视频号支持 3 账号扫码直连", "点击右上角「连接平台」扫码同步袁六伟/汇芯袁总/山河来电", .orange)
                     }
                     if let summary = store.wechatSummary {
                         insight("公众号昨日数据已接入", "净增 \(summary.newFollowers)，阅读 \(summary.articleReads)", .green)

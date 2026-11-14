@@ -46,10 +46,24 @@ PLATFORM_URLS = {
         "home": "https://channels.weixin.qq.com/platform",
         "list": "https://channels.weixin.qq.com/platform/post/list",
     },
+    "channels_huixin": {
+        "login": "https://channels.weixin.qq.com/platform",
+        "home": "https://channels.weixin.qq.com/platform",
+        "list": "https://channels.weixin.qq.com/platform/post/list",
+    },
+    "channels_shanhe": {
+        "login": "https://channels.weixin.qq.com/platform",
+        "home": "https://channels.weixin.qq.com/platform",
+        "list": "https://channels.weixin.qq.com/platform/post/list",
+    },
     "xhs": {
         "login": "https://creator.xiaohongshu.com/login",
         "home": "https://creator.xiaohongshu.com/new/home",
         "notes": "https://creator.xiaohongshu.com/new/note-manager",
+    },
+    "wechat": {
+        "login": "https://mp.weixin.qq.com/",
+        "home": "https://mp.weixin.qq.com/",
     },
 }
 
@@ -390,27 +404,28 @@ async def sync_bilibili(playwright) -> Dict[str, Any]:
             await ctx.close()
 
 
-async def sync_channels(playwright) -> Dict[str, Any]:
+async def sync_channels_account(
+    playwright,
+    key: str,
+    display_platform: str,
+    default_name: str,
+    preferred_port: Optional[int] = None,
+) -> Dict[str, Any]:
     res: Dict[str, Any] = {
-        "platform": "视频号",
-        "key": "channels",
+        "platform": display_platform,
+        "key": key,
         "ok": False,
         "need_login": False,
         "source": "微信视频号助手",
         "updated_at": now_iso(),
         "items": [],
     }
-    # Prefer live CDP daemon ONLY if it is already logged in
+    # Prefer live CDP daemon for this specific account ONLY if already logged in
     live_port = None
-    live_name = None
-    for name, port in CHANNEL_CDP_PORTS:
-        if cdp_is_alive(port):
-            tabs = cdp_tabs(port)
-            logged_tabs = [t for t in tabs if "channels.weixin.qq.com" in (t.get("url") or "") and "login" not in (t.get("url") or "")]
-            if logged_tabs:
-                live_port = port
-                live_name = name
-                break
+    if preferred_port is not None and cdp_is_alive(preferred_port):
+        tabs = cdp_tabs(preferred_port)
+        if any("channels.weixin.qq.com" in (t.get("url") or "") and "login" not in (t.get("url") or "") for t in tabs):
+            live_port = preferred_port
 
     browser = None
     ctx = None
@@ -426,7 +441,7 @@ async def sync_channels(playwright) -> Dict[str, Any]:
                 await page.reload(wait_until="domcontentloaded", timeout=20000)
                 await page.wait_for_timeout(2000)
         else:
-            ctx = await launch_profile_context(playwright, "channels", headless=True)
+            ctx = await launch_profile_context(playwright, key, headless=True)
             page = ctx.pages[0] if ctx.pages else await ctx.new_page()
             await page.goto(PLATFORM_URLS["channels"]["home"], wait_until="domcontentloaded", timeout=35000)
             await page.wait_for_timeout(3500)
@@ -435,7 +450,7 @@ async def sync_channels(playwright) -> Dict[str, Any]:
         body = await page.locator("body").first.inner_text()
         if "login" in url.lower() or "微信扫码" in body or "登录视频号助手" in body:
             res["need_login"] = True
-            res["message"] = f"需要微信扫码登录（视频号助手{f' · {live_name}' if live_name else ''}）"
+            res["message"] = f"需要微信扫码登录（{default_name}）"
             return res
 
         # Extract account name and metrics from 视频号助手首页
@@ -449,7 +464,6 @@ async def sync_channels(playwright) -> Dict[str, Any]:
         shares = num_after(body, ["新增分享", "分享", "转发"])
         posts = num_after(body, ["视频", "发表内容", "视频数", "作品数"])
 
-        # Try fetching recent posts from 视频号内容管理
         items: List[Dict[str, Any]] = []
         try:
             await page.goto(PLATFORM_URLS["channels"]["list"], wait_until="domcontentloaded", timeout=25000)
@@ -469,13 +483,13 @@ async def sync_channels(playwright) -> Dict[str, Any]:
                 }"""
             )
             for it in raw_items or []:
-                items.append({"title": it.get("title", "视频号动态"), "platform": "视频号", "status": "已发布", "views": "—", "likes": "—"})
+                items.append({"title": it.get("title", "视频号动态"), "platform": display_platform, "status": "已发布", "views": "—", "likes": "—"})
         except Exception:
             pass
 
         res.update({
             "ok": True,
-            "account": account_name or live_name or "视频号创作者",
+            "account": account_name or default_name,
             "followers": fans,
             "delta": delta,
             "posts": posts if posts is not None else (len(items) if items else None),
@@ -484,17 +498,29 @@ async def sync_channels(playwright) -> Dict[str, Any]:
             "comments": comments,
             "shares": shares,
             "items": items,
-            "message": f"已连接 · {account_name or live_name or '视频号助手'}",
+            "message": f"已连接 · {account_name or default_name}",
         })
         return res
     except Exception as e:
-        res["message"] = f"视频号同步失败：{e}"
+        res["message"] = f"{display_platform}同步失败：{e}"
         return res
     finally:
         if browser is not None:
             await browser.close()
         elif ctx is not None:
             await ctx.close()
+
+
+async def sync_channels(playwright) -> Dict[str, Any]:
+    return await sync_channels_account(playwright, "channels", "视频号 · 袁六伟", "袁六伟", 9333)
+
+
+async def sync_channels_huixin(playwright) -> Dict[str, Any]:
+    return await sync_channels_account(playwright, "channels_huixin", "视频号 · 汇芯袁总", "汇芯袁总", 9335)
+
+
+async def sync_channels_shanhe(playwright) -> Dict[str, Any]:
+    return await sync_channels_account(playwright, "channels_shanhe", "视频号 · 山河来电", "山河来电", 9334)
 
 
 async def sync_xhs(playwright) -> Dict[str, Any]:
@@ -548,10 +574,62 @@ async def sync_xhs(playwright) -> Dict[str, Any]:
             await ctx.close()
 
 
+async def sync_wechat(playwright) -> Dict[str, Any]:
+    res: Dict[str, Any] = {
+        "platform": "公众号",
+        "key": "wechat",
+        "ok": False,
+        "need_login": False,
+        "source": "微信公众平台",
+        "updated_at": now_iso(),
+        "items": [],
+    }
+    ctx = None
+    try:
+        ctx = await launch_profile_context(playwright, "wechat", headless=True)
+        page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+        await page.goto(PLATFORM_URLS["wechat"]["home"], wait_until="domcontentloaded", timeout=35000)
+        await page.wait_for_timeout(3500)
+
+        url = page.url or ""
+        body = await page.locator("body").first.inner_text()
+        if "token=" not in url and ("微信扫一扫" in body or "登录" in body[:200] or "使用账号登录" in body):
+            res["need_login"] = True
+            res["message"] = "需要微信扫码登录（公众号）"
+            return res
+
+        fans = num_after(body, ["总用户数", "粉丝数", "关注人数"])
+        delta = num_after(body, ["昨日净增", "净增关注", "新增人数"])
+        views = num_after(body, ["阅读次数", "昨日阅读", "阅读"])
+        posts = num_after(body, ["已群发", "群发", "文章数"])
+        lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
+        account_name = next((ln for ln in lines[:12] if 2 <= len(ln) <= 20 and "公众平台" not in ln and not re.fullmatch(r"[\d,.]+", ln)), "公众号")
+
+        res.update({
+            "ok": True,
+            "account": account_name,
+            "followers": fans,
+            "delta": delta,
+            "posts": posts,
+            "views": views,
+            "message": f"已连接 · {account_name}",
+        })
+        return res
+    except Exception as e:
+        res["message"] = f"公众号同步失败：{e}"
+        return res
+    finally:
+        if ctx is not None:
+            await ctx.close()
+
+
 SYNC_HANDLERS = {
     "douyin": sync_douyin,
     "channels": sync_channels,
+    "channels_huixin": sync_channels_huixin,
+    "channels_shanhe": sync_channels_shanhe,
     "xhs": sync_xhs,
+    "wechat": sync_wechat,
 }
 
 
@@ -574,10 +652,13 @@ async def run_login(platform: str, timeout_sec: int = 180) -> Dict[str, Any]:
             if platform == "douyin" and "creator-micro/home" in cur:
                 logged_in = True
                 break
-            if platform == "channels" and "channels.weixin.qq.com/platform" in cur and "login" not in cur:
+            if platform.startswith("channels") and "channels.weixin.qq.com/platform" in cur and "login" not in cur:
                 logged_in = True
                 break
             if platform == "xhs" and "creator.xiaohongshu.com/new/" in cur:
+                logged_in = True
+                break
+            if platform == "wechat" and "mp.weixin.qq.com/cgi-bin/" in cur and "token=" in cur:
                 logged_in = True
                 break
         await page.wait_for_timeout(2000)
@@ -623,9 +704,9 @@ def main() -> None:
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("status")
     p_sync = sub.add_parser("sync")
-    p_sync.add_argument("--platform", default="all", choices=["all", "douyin", "channels", "xhs"])
+    p_sync.add_argument("--platform", default="all", choices=["all", "douyin", "channels", "channels_huixin", "channels_shanhe", "xhs", "wechat"])
     p_login = sub.add_parser("login")
-    p_login.add_argument("--platform", required=True, choices=["douyin", "channels", "xhs"])
+    p_login.add_argument("--platform", required=True, choices=["douyin", "channels", "channels_huixin", "channels_shanhe", "xhs", "wechat"])
     p_login.add_argument("--timeout", type=int, default=180)
     args = parser.parse_args()
 
