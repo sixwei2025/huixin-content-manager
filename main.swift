@@ -1144,7 +1144,7 @@ struct PlatformCard: View {
                 Spacer(minLength: 4)
                 Text(item.delta)
                     .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(item.delta == "—" ? .secondary : .green)
+                    .foregroundStyle(item.delta == "—" ? Color.secondary : Color.green)
                     .lineLimit(1)
             }
             Text(item.followers).font(.system(size: 23, weight: .bold, design: .rounded)).monospacedDigit()
